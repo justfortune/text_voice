@@ -1,0 +1,5 @@
+# Ключевые пакеты окружения env рабочей машины (Python 3.12.15; отчёт 11.11.2026).
+# Формат — файл ограничений pip: pip install ... -c versii_env.txt --extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+transformers==4.57.3
+qwen-tts==0.1.1

@@ -1,0 +1,67 @@
+{
+ "at": "2026-11-11 19:45:21",
+ "kit": "NOX_STUDIO 2026-11-11g",
+ "windows": "Windows-10-10.0.19043-SP0",
+ "python_envfast": "3.12.15",
+ "gpu": "NVIDIA GeForce RTX 3090, 621.14, 24576 MiB",
+ "ffmpeg": [
+  "D:\\nox_audiobook\\tools\\ffmpeg\\ffmpeg-master-latest-win64-gpl\\bin\\ffmpeg.exe"
+ ],
+ "models": [
+  {
+   "name": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+   "snapshots": [
+    "fd4b254389122332181a7c3db7f27e918eec64e3"
+   ],
+   "mb": 4544
+  },
+  {
+   "name": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+   "snapshots": [
+    "5ecdb67327fd37bb2e042aab12ff7391903235d3"
+   ],
+   "mb": 4520
+  },
+  {
+   "name": "Qwen/Qwen3-TTS-Tokenizer-12Hz",
+   "snapshots": [
+    "7dd38ad4e9bad454aae9cd937d0cd577604fe229"
+   ],
+   "mb": 682
+  },
+  {
+   "name": "shib79/qwen3-tts-12hz-1.7b-ru-stress-cf",
+   "snapshots": [
+    "66338b83519a05e3d4f923e0f9b4cd2ce686f138"
+   ],
+   "mb": 9088
+  },
+  {
+   "name": "Systran/faster-whisper-small",
+   "snapshots": [
+    "536b0662742c02347bc0e980a01041f333bce120"
+   ],
+   "mb": 972
+  }
+ ],
+ "packages_key": {
+  "torch": "2.11.0+cu128",
+  "torchaudio": "2.11.0+cu128",
+  "transformers": "5.15.1",
+  "faster_qwen3_tts": "0.5.4",
+  "qwen_tts": "0.1.1.post1",
+  "faster_whisper": "1.2.1",
+  "ctranslate2": "4.8.5",
+  "ruaccent": "1.5.8.3",
+  "onnxruntime": "1.31.1",
+  "numpy": "2.5.4",
+  "soundfile": "0.14.0",
+  "librosa": "1.0.0",
+  "docx": "1.2.0"
+ },
+ "cuda": {
+  "available": true,
+  "torch_cuda": "12.8"
+ },
+ "python_env": "3.12.15"
+}

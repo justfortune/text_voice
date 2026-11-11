@@ -1,0 +1,14 @@
+# Ключевые пакеты окружения envfast рабочей машины (Python 3.12.15; отчёт 11.11.2026).
+# Формат — файл ограничений pip: pip install ... -c versii_envfast.txt --extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+transformers==5.15.1
+faster-qwen3-tts==0.5.4
+qwen-tts-hf==0.1.1.post1
+faster-whisper==1.2.1
+ruaccent==1.5.8.3
+silero-stress==1.5
+onnxruntime==1.31.1
+openpyxl==3.1.5
+scipy==1.18.1
+librosa==1.0.0
+numpy==2.5.4
