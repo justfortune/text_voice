@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-11g
+# NOX_KIT 2026-11-11i
 """
 zvuk_k1a.py — СВЕДЕНИЕ ДОРОЖЕК: голос + эффекты + фон местности + музыка, синхронно по таймингам частей.
 
@@ -22,8 +22,11 @@ zvuk_k1a.py — СВЕДЕНИЕ ДОРОЖЕК: голос + эффекты + �
 каждой дорожке, для любого звукового редактора) — parts_zvuk\\timeline\\part_NN_tl.csv.
 Часть пересводится, только если изменилась она сама, её звук или громкости (отпечаток в .sig рядом).
 
-Звуковой комплект (из другого чата): ищется в D:\\nox_audiobook\\zvuk; если его нет — распаковывается туда сам из
-Nox_*.zip в Загрузках (~210 МБ, разово). Фоны местности собираются разово его же tools\\make_ambient_bed.py.
+Звуковой комплект (из другого чата) живёт в D:\\nox_audiobook\\zvuk, каждый — в своей папке. Берётся лучший: новее
+поколением (с готовыми петлями фона и справочником имён), затем по дате архива. Если в Загрузках лежит архив комплекта
+(Nox_*.zip с партитурой cues_book1.json; архив с картинками не подходит) новее всех распакованных — он распаковывается
+сам, разово (~310 МБ), через временную папку: оборванная распаковка не оставит половину комплекта. Прежний комплект не
+удаляется. Музыка и фоны ищутся по имени без расширения: mp3 или WAV, готовая петля flac или своя сборка wav.
 
 Запуск (видеокарта не нужна; можно, пока идёт озвучка — сводятся уже готовые части):
   D:\\kniga1a\\envfast\\Scripts\\python.exe "%USERPROFILE%\\Downloads\\zvuk_k1a.py"
@@ -34,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import glob
 import hashlib
 import json
 import math
@@ -147,48 +149,341 @@ class Assets:
 
 
 # ------------------------------------------------------------------------------------------------ комплект
-def find_kit(arg=None):
-    cands = [Path(arg)] if arg else []
-    base = Path(r"D:\nox_audiobook\zvuk")
-    cands += [p.parent for p in sorted(base.rglob("cues_book1.json"))] if base.is_dir() else []
-    for c in cands:
-        if (c / "cues_book1.json").exists() and (c / "music").is_dir():
-            return c
-    dl = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Downloads"
-    zips = sorted(dl.glob("Nox_*.zip"), key=lambda p: p.stat().st_mtime, reverse=True) if dl.is_dir() else []
-    for z in zips:
+KIT_MARK = ".nox_kit.json"
+NAMES_JSON = "файлы_по_именам.json"
+MUSIC_EXT = (".mp3", ".wav", ".flac", ".ogg", ".m4a")          # в комплекте музыка в mp3, в папке игры — WAV
+BED_EXT = (".wav", ".flac", ".mp3", ".ogg")                    # своя сборка фона (.wav) главнее готовой петли (.flac)
+SFX_EXT = (".wav", ".flac", ".mp3", ".ogg")
+
+
+def kit_base() -> Path:
+    return Path(os.environ.get("NOX_ZVUK") or r"D:\nox_audiobook\zvuk")
+
+
+def kit_downloads() -> Path:
+    return Path(os.environ.get("NOX_DL") or (Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Downloads"))
+
+
+def kit_ok(d: Path) -> bool:
+    return (d / "cues_book1.json").is_file() and (d / "music").is_dir()
+
+
+def _crc(path: Path) -> int:
+    import zlib
+    c = 0
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            c = zlib.crc32(b, c)
+    return c & 0xFFFFFFFF
+
+
+def kit_info(d: Path) -> dict:
+    """Распакованный комплект: поколение (2 — с готовыми петлями фона и справочником имён), из какого архива, когда."""
+    try:
+        m = json.loads((d / KIT_MARK).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        m = {}
+    try:
+        tm = (d / "cues_book1.json").stat().st_mtime
+    except OSError:
+        tm = 0.0
+    return dict(dir=d, name=d.name, gen=2 if (d / NAMES_JSON).is_file() else 1, zip=m.get("zip"), sig=m.get("sig"),
+                at=float(m.get("zip_mtime") or tm), marked=bool(m))
+
+
+def kits_unpacked(base=None) -> list:
+    """Все распакованные комплекты общей папки, лучший — первым: новее поколением, затем архивом, затем по имени."""
+    base = Path(base) if base else kit_base()
+    out = []
+    if base.is_dir():                                    # комплект — сама папка, её подпапка или подпапка подпапки
+        cands = [base / "cues_book1.json"] + sorted(base.glob("*/cues_book1.json")) + sorted(base.glob("*/*/cues_book1.json"))
+        for cj in cands:
+            if kit_ok(cj.parent) and not any(p.name.startswith("_raspakovka") for p in cj.parents):
+                out.append(kit_info(cj.parent))
+    out.sort(key=lambda k: (-k["gen"], -k["at"], k["name"]))
+    return out
+
+
+def zip_name(i) -> str:
+    name = i.filename
+    if not (i.flag_bits & 0x800):
         try:
-            with zipfile.ZipFile(z) as zf:
-                if not any(i.filename.endswith("cues_book1.json") for i in zf.infolist()):
+            name = name.encode("cp437").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return name.replace("\\", "/")
+
+
+def zip_probe(z: Path):
+    """Архив из Загрузок — звуковой комплект? -> сведения о нём (без распаковки) или None. Архив с картинками и любой
+    другой Nox_*.zip без партитуры и музыки сюда не подходит."""
+    try:
+        with zipfile.ZipFile(z) as zf:
+            infos = zf.infolist()
+            names = [zip_name(i) for i in infos]
+            cj = [k for k, nm in enumerate(names) if nm.rsplit("/", 1)[-1] == "cues_book1.json"]
+            if not cj:
+                return None
+            k = min(cj, key=lambda q: (names[q].count("/"), names[q]))
+            top = names[k].rsplit("/", 1)[0] if "/" in names[k] else ""
+            pre = top + "/" if top else ""
+            if not any(nm.startswith(pre + "music/") and not nm.endswith("/") for nm in names):
+                return None
+            st = z.stat()
+            return dict(zip=z, name=z.name, top=top, gen=2 if (pre + NAMES_JSON) in names else 1,
+                        sig=f"{st.st_size}:{infos[k].CRC:08x}:{len(infos)}", crc=infos[k].CRC, at=st.st_mtime,
+                        size=sum(i.file_size for i in infos), files=len(infos))
+    except (OSError, zipfile.BadZipFile, ValueError, RuntimeError):
+        return None
+
+
+def kit_zips(dl=None) -> list:
+    """Архивы звукового комплекта в Загрузках, лучший — первым («(1)»-копии — те же архивы, годится любая)."""
+    dl = Path(dl) if dl else kit_downloads()
+    out = []
+    if dl.is_dir():
+        for z in dl.glob("Nox_*.zip"):
+            p = zip_probe(z)
+            if p:
+                out.append(p)
+    out.sort(key=lambda p: (-p["gen"], -p["at"], p["name"]))
+    return out
+
+
+def kit_pick(base=None, dl=None) -> dict:
+    """Какой комплект брать — ничего не распаковывая. -> dict(kit=папка лучшего распакованного или None, zip=архив из
+    Загрузок, который лучше всего распакованного и ждёт распаковки, или None, others=остальные распакованные)."""
+    kits = kits_unpacked(base)
+    best = kits[0] if kits else None
+    wait = None
+    for z in kit_zips(dl)[:1]:
+        same = next((k for k in kits if k["sig"] and k["sig"] == z["sig"]), None)
+        if same is None:                                 # распакован прежней версией (без метки): узнаём по партитуре
+            for k in kits:
+                if not k["marked"] and k["gen"] == z["gen"]:
+                    try:
+                        if _crc(k["dir"] / "cues_book1.json") == z["crc"]:
+                            same = k
+                            break
+                    except OSError:
+                        pass
+        if same is None and (best is None or (z["gen"], z["at"]) > (best["gen"], best["at"])):
+            wait = z
+    return dict(kit=best["dir"] if best else None, zip=wait, others=[k["dir"] for k in kits[1:]])
+
+
+def _pid_alive(pid: int) -> bool:
+    """Жив ли процесс (не знаем — считаем, что жив)."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            h = k32.OpenProcess(0x1000, False, int(pid))         # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return ctypes.get_last_error() == 5 or k32.GetLastError() == 5     # «отказано в доступе» — процесс есть
+            code = ctypes.c_ulong()
+            ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+            k32.CloseHandle(h)
+            return bool(ok) and code.value == 259                # STILL_ACTIVE
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, ValueError):
+        return False
+    except Exception:
+        return True
+
+
+def kit_unpack(z: dict, base=None, progress=None) -> Path:
+    """Архив комплекта -> своя папка в общей папке звуков. Распаковка идёт во временную папку и переименовывается в
+    конце: оборванная распаковка не оставит половину комплекта под видом целого. Прежние комплекты не трогаются
+    (на их файлы могут ссылаться звуки, уже стоящие на дорожках студии). Один архив распаковывается один раз, даже
+    если за него взялись сразу студия и сведение go: второй ждёт первого и берёт готовую папку."""
+    base = Path(base) if base else kit_base()
+    base.mkdir(parents=True, exist_ok=True)
+    lock, t0 = base / "_raspakovka.lock", time.time()
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"{os.getpid()} {time.time():.0f}".encode())
+            os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - lock.stat().st_mtime
+                owner = int(lock.read_text(encoding="ascii", errors="ignore").split()[0])
+            except (OSError, ValueError, IndexError):
+                age, owner = 0.0, None
+                if not lock.exists():
                     continue
-                print(f"  распаковываю звуковой комплект {z.name} -> {base} (разово, ~210 МБ)…", flush=True)
-                for i in zf.infolist():
-                    name = i.filename
-                    if not (i.flag_bits & 0x800):
-                        try:
-                            name = name.encode("cp437").decode("utf-8")
-                        except (UnicodeEncodeError, UnicodeDecodeError):
-                            pass
-                    if name.endswith("/") or ".." in Path(name).parts:
-                        continue
-                    out = base / name
-                    out.parent.mkdir(parents=True, exist_ok=True)
-                    with zf.open(i) as src, open(out, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
-            for p in sorted(base.rglob("cues_book1.json")):
-                return p.parent
+            # брошенный замок: распаковку оборвали (её процесса уже нет) или замок давно не обновлялся —
+            # живая распаковка трогает его каждые 200 файлов
+            if (owner is not None and owner != os.getpid() and not _pid_alive(owner)) or age > 120:
+                try:
+                    lock.unlink()
+                except OSError:
+                    pass
+                continue
+            if time.time() - t0 > 900:
+                raise RuntimeError("другая распаковка звукового комплекта не закончилась за 15 минут")
+            time.sleep(1.0)
+    tmp = base / f"_raspakovka_{os.getpid()}"
+    try:
+        same = next((k for k in kits_unpacked(base) if k["sig"] and k["sig"] == z["sig"]), None)
+        if same is not None:                             # пока ждали, этот архив распаковал другой процесс
+            return same["dir"]
+        free = shutil.disk_usage(str(base)).free
+        need = z["size"] + 200 * 1024 * 1024
+        if free < need:
+            raise RuntimeError(f"на диске мало места: нужно {need / 1e6:.0f} МБ, свободно {free / 1e6:.0f} МБ")
+        for old in base.glob("_raspakovka_*"):           # остатки оборванных распаковок
+            if old.is_dir():
+                shutil.rmtree(old, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+        root, done, count = tmp.resolve(), 0, 0
+        with zipfile.ZipFile(z["zip"]) as zf:
+            for i in zf.infolist():
+                name = zip_name(i)
+                parts = [p for p in name.split("/") if p]
+                if name.endswith("/") or not parts:
+                    continue
+                if name.startswith("/") or any(p in ("..", ".") or ":" in p for p in parts):
+                    continue                             # путь наружу из папки комплекта — не распаковывается
+                out = tmp.joinpath(*parts)
+                if root not in out.resolve().parents:
+                    continue
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(i) as src, open(out, "wb") as dst:
+                    shutil.copyfileobj(src, dst, 1 << 20)
+                done += i.file_size
+                count += 1
+                if count % 200 == 0:
+                    os.utime(lock, None)                 # замок жив: его не примут за брошенный
+                if progress:
+                    progress(done, z["size"])
+        src = tmp.joinpath(*z["top"].split("/")) if z["top"] else tmp
+        if not kit_ok(src):
+            raise RuntimeError("в архиве нет партитуры cues_book1.json или папки music")
+        (src / KIT_MARK).write_text(json.dumps(dict(zip=z["name"], sig=z["sig"], zip_mtime=z["at"], files=z["files"],
+                                                     unpacked=time.strftime("%Y-%m-%d %H:%M:%S")), ensure_ascii=False),
+                                    encoding="utf-8")
+        name = (z["top"].rsplit("/", 1)[-1] if z["top"] else re.sub(r"\s*\(\d+\)$", "", Path(z["name"]).stem)) or "komplekt"
+        dst, k = base / name, 1
+        while dst.exists():
+            k += 1
+            dst = base / f"{name}_{k}"
+        for attempt in range(6):                         # антивирус или индексатор может секунду держать свежие файлы
+            try:
+                os.replace(src, dst)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(1.5)
+        _KIX.pop(str(dst), None)
+        return dst
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def find_kit(arg=None, unpack=True, say=None):
+    """Папка звукового комплекта: указанная; иначе лучшая из распакованных; а если в Загрузках лежит архив комплекта
+    лучше всех распакованных — он распаковывается (разово) и берётся."""
+    say = say or (lambda s: print(s, flush=True))
+    if arg and kit_ok(Path(arg)):
+        return Path(arg)
+    pk = kit_pick()
+    z = pk["zip"]
+    if z is not None and unpack:
+        say(f"  распаковываю звуковой комплект {z['name']} -> {kit_base()} (разово, ~{z['size'] / 1e6:.0f} МБ)…")
+        try:
+            return kit_unpack(z)
         except Exception as e:
-            print(f"  {z.name}: не распаковался ({type(e).__name__}: {e})", flush=True)
-    return None
+            say(f"  {z['name']}: не распаковался ({type(e).__name__}: {e})"
+                + (f" — беру прежний комплект {pk['kit'].name}" if pk["kit"] is not None else ""))
+    return pk["kit"]
+
+
+_KIX = {}
+
+
+def kit_index(kit: Path, fresh=False) -> dict:
+    """Что лежит в комплекте: музыка и фоны — по имени без расширения и регистра (mp3 или WAV, flac или wav — всё равно),
+    эффекты — по логическому имени игры (sfx\\<раздел>\\Имя__файл.wav), сырые файлы игры — по имени (sfx_all)."""
+    key = str(kit)
+    ix = None if fresh else _KIX.get(key)
+    if ix is not None:
+        return ix
+    ix = dict(music={}, beds={}, sfx={}, raw={}, names={})
+    for sub, order in (("music", MUSIC_EXT), ("beds", BED_EXT), ("sfx_all", SFX_EXT)):
+        d = kit / sub
+        if d.is_dir():
+            tgt = ix["raw" if sub == "sfx_all" else sub]
+            for f in sorted(d.iterdir()):
+                e = f.suffix.lower()
+                if e in order and f.is_file():
+                    k = f.stem.lower()
+                    if k not in tgt or order.index(e) < order.index(tgt[k].suffix.lower()):
+                        tgt[k] = f
+    d = kit / "sfx"
+    if d.is_dir():
+        for f in d.rglob("*__*"):
+            if f.suffix.lower() in SFX_EXT and f.is_file():
+                ix["sfx"].setdefault(f.name.split("__", 1)[0], []).append(f)
+        for v in ix["sfx"].values():
+            v.sort(key=str)
+    try:
+        nj = json.loads((kit / NAMES_JSON).read_text(encoding="utf-8"))
+        for nm, v in (nj.get("sfx") or {}).items():
+            if isinstance(v, dict):
+                ix["names"][nm] = [str(x) for x in (v.get("варианты") or [])]
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        with open(kit / "sfx_dictionary.csv", encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f, delimiter=";"):
+                ix["names"].setdefault(r["логическое_имя"], [f"sfx_all/{x}.wav" for x in (r.get("файлы") or "").split()])
+    except (OSError, KeyError):
+        pass
+    _KIX[key] = ix
+    return ix
+
+
+def kit_file(kit: Path, kind: str, name: str):
+    """Имя из партитуры -> файл комплекта. kind: music | bed -> Path или None; sfx -> список вариантов (может быть пуст)."""
+    ix = kit_index(kit)
+    if kind == "music":
+        return ix["music"].get(str(name).lower())
+    if kind == "bed":
+        return ix["beds"].get(str(name).lower())
+    hits = list(ix["sfx"].get(name) or [])
+    if not hits:
+        for rel in ix["names"].get(name) or []:
+            p = kit / rel
+            if not p.is_file():
+                p = ix["raw"].get(Path(rel).stem.lower())
+            if p is not None and p.is_file():
+                hits.append(p)
+    return hits
 
 
 def ensure_beds(kit: Path, used):
+    """Фоны местности: в комплекте с готовыми петлями (beds\\*.flac) делать нечего; в прежнем они собираются разово
+    его же tools\\make_ambient_bed.py. Собирается, только если чего-то из нужного нет."""
     beds = kit / "beds"
-    missing = [b for b in used if not (beds / f"{b}.wav").exists()]
+    missing = [b for b in used if kit_file(kit, "bed", b) is None]
     tool = kit / "tools" / "make_ambient_bed.py"
     if missing and tool.exists():
         print(f"  собираю фоны местности ({len(missing)} шт., разово)…", flush=True)
         subprocess.run([sys.executable, str(tool), "--all-used", "--seconds", "120"], cwd=str(kit))
+        kit_index(kit, fresh=True)
+        missing = [b for b in used if kit_file(kit, "bed", b) is None]
+    if missing:
+        print(f"  !! в комплекте нет фонов местности: {', '.join(missing[:8])}{'…' if len(missing) > 8 else ''}", flush=True)
     return beds
 
 
@@ -232,16 +527,17 @@ def probe_dur(ff, path):
 
 
 # ------------------------------------------------------------------------------------------------ партитура -> дорожки
-def build_timeline(rows, starts, cues, kit, music_dur, a):
+def build_timeline(rows, starts, cues, kit, music_dur, a, nofile=None):
     """Отметки партитуры -> предметы дорожек в ОБЩЕМ времени книги: dict(kind, file, start, end, offset, loop, gain,
-    fade_in, fade_out, note). starts: индекс реплики -> (начало, конец) в общем времени (только собранные)."""
-    sfx_dict = {}
-    try:
-        with open(kit / "sfx_dictionary.csv", encoding="utf-8-sig") as f:
-            for r in csv.DictReader(f, delimiter=";"):
-                sfx_dict[r["логическое_имя"]] = r["файлы"].split()
-    except OSError:
-        pass
+    fade_in, fade_out, note, cid). starts: индекс реплики -> (начало, конец) в общем времени (только собранные).
+    cid — от какой отметки партитуры предмет (C041:0 — её первый звук; C020r — музыка, вернувшаяся после темы части).
+    nofile (список) — сюда пишутся имена, для которых в комплекте нет файла: такой предмет на дорожку не ставится."""
+    nofile = nofile if nofile is not None else []
+
+    def lost(what, name):
+        if (what, name) not in nofile:
+            nofile.append((what, name))
+            print(f"  !! в комплекте нет файла: {what} {name}", flush=True)
     amb_vol = {}
     try:
         with open(kit / "ambient_loops.csv", encoding="utf-8-sig") as f:
@@ -298,10 +594,16 @@ def build_timeline(rows, starts, cues, kit, music_dur, a):
         p = text.find(key[:60], cursor.get(ch, 0))
         if p < 0:
             p = text.find(key[:30], cursor.get(ch, 0))
+        back = p < 0
+        if back:                                         # якорь раньше курсора: порядок сбит правкой текста — ставим
+            p = text.find(key[:60])
+            if p < 0:
+                p = text.find(key[:30])
         if p < 0 or not key:
             missed.append(c)
             continue
-        cursor[ch] = p
+        if not back:
+            cursor[ch] = p
         pe = p + len(key)
         t0, t_end = at(offs, p), at(offs, pe)
         if t0 is None or t_end is None:
@@ -340,36 +642,43 @@ def build_timeline(rows, starts, cues, kit, music_dur, a):
 
     items = []
     cur, beds, stack = None, None, []
-    mpath = lambda t: str(kit / "music" / f"{t}.WAV")
+
+    def mpath(t):                                        # в комплекте музыка в mp3, в папке игры — WAV: что есть
+        p = kit_file(kit, "music", t)
+        if p is None:
+            lost("музыка", t)
+        return str(p) if p is not None else None
     posat = lambda cu, t: (cu["offset"] + t - cu["start"]) % max(1.0, music_dur.get(cu["track"], 60))
 
     def end_music(t, fo):
         nonlocal cur
         if cur and t - cur["start"] > 0.05:
-            items.append(dict(kind="music", file=mpath(cur["track"]), start=cur["start"], end=t + fo,
-                              offset=cur["offset"], loop=1, gain=a.music, fade_in=cur["fi"], fade_out=fo,
-                              note=cur["track"]))
+            mf = mpath(cur["track"])
+            if mf:
+                items.append(dict(kind="music", file=mf, start=cur["start"], end=t + fo,
+                                  offset=cur["offset"], loop=1, gain=a.music, fade_in=cur["fi"], fade_out=fo,
+                                  note=cur["track"], cid=cur["cid"]))
         cur = None
 
-    def start_music(track, t, offset=0.0, fi=1.0):
+    def start_music(track, t, offset=0.0, fi=1.0, cid=""):
         nonlocal cur
-        cur = dict(track=track, start=t, offset=offset, fi=fi)
+        cur = dict(track=track, start=t, offset=offset, fi=fi, cid=cid)
 
     def end_beds(t):
         nonlocal beds
         if beds and t > beds["start"]:
-            for nm in beds["names"]:
+            for k, nm in enumerate(beds["names"]):
                 g = a.amb * min(2.5, max(0.25, amb_vol.get(nm, 20) / 20.0))
-                items.append(dict(kind="amb", file=str(kit / "beds" / f"{nm}.wav"), start=beds["start"], end=t + 2,
-                                  offset=0, loop=1, gain=g, fade_in=2.0, fade_out=2.0, note=nm))
+                bf = kit_file(kit, "bed", nm)            # готовая петля (.flac) или своя сборка (.wav)
+                if bf is None:
+                    lost("фон", nm)
+                    continue
+                items.append(dict(kind="amb", file=str(bf), start=beds["start"], end=t + 2,
+                                  offset=0, loop=1, gain=g, fade_in=2.0, fade_out=2.0, note=nm, cid=f"{beds['cid']}:{k}"))
         beds = None
 
     def find_sfx(name):
-        hits = sorted(glob.glob(str(kit / "sfx" / "**" / f"{name}__*.wav"), recursive=True))
-        if not hits:
-            hits = [str(kit / "sfx_all" / f"{f}.wav") for f in sfx_dict.get(name, [])
-                    if (kit / "sfx_all" / f"{f}.wav").exists()]
-        return hits
+        return [str(p) for p in kit_file(kit, "sfx", name)]
 
     for t0, t1, c in events:
         if stop_at is not None and t0 >= stop_at:
@@ -382,7 +691,7 @@ def build_timeline(rows, starts, cues, kit, music_dur, a):
                 if cur and cur["track"] == tgt:
                     continue
                 end_music(t0, 1.0)
-                start_music(tgt, t0, 0.0, fi)
+                start_music(tgt, t0, 0.0, fi, c["id"])
             elif act == "stop":
                 end_music(t0, fo)
                 if "стек" in note:
@@ -390,37 +699,39 @@ def build_timeline(rows, starts, cues, kit, music_dur, a):
             elif act == "push":
                 stack.append((cur["track"], posat(cur, t0)) if cur else (None, 0.0))
                 end_music(t0, 1.0)
-                start_music(tgt, t0, 0.0, fi)
+                start_music(tgt, t0, 0.0, fi, c["id"])
             elif act == "pop":
                 prev = stack.pop() if stack else (None, 0.0)
                 end_music(t0, 1.0)
                 if prev[0]:
-                    start_music(prev[0], t0, prev[1], fi)
+                    start_music(prev[0], t0, prev[1], fi, c["id"])
             elif act == "jingle":
                 saved = (cur["track"], posat(cur, t0)) if cur else None
                 end_music(t0, 1.0)
                 jend = t0 + music_dur.get(tgt, 34)
-                items.append(dict(kind="music", file=mpath(tgt), start=t0, end=jend, offset=0, loop=0, gain=a.music,
-                                  fade_in=0.5, fade_out=1.0, note=tgt + " (тема части)"))
+                jf = mpath(tgt)
+                if jf:
+                    items.append(dict(kind="music", file=jf, start=t0, end=jend, offset=0, loop=0, gain=a.music,
+                                      fade_in=0.5, fade_out=1.0, note=tgt + " (тема части)", cid=c["id"]))
                 if saved and saved[0]:
-                    start_music(saved[0], jend, saved[1], 1.0)
+                    start_music(saved[0], jend, saved[1], 1.0, c["id"] + "r")
         elif L == "A":
             names = [x for x in tgt.split("+") if x] if act == "bed" else []
             if beds and names == beds["names"]:
                 continue
             end_beds(t0)
             if names:
-                beds = dict(names=names, start=t0)
+                beds = dict(names=names, start=t0, cid=c["id"])
         elif L == "S":
             ts = max(0.0, t0 - 0.5) if "ДО" in (note + when) else t1 + 0.05
             for k, nm in enumerate([x for x in tgt.split("+") if x]):
                 hits = find_sfx(nm)
                 if not hits:
-                    print(f"  !! нет файла эффекта {nm} ({c.get('id')})", flush=True)
+                    lost("эффект", nm)
                     continue
                 items.append(dict(kind="sfx", file=random.Random(c["id"]).choice(hits), start=ts + 0.6 * k, end=None,
                                   offset=0, loop=0, gain=a.sfx * (0.5 if "тихо" in note else 1.0), fade_in=0,
-                                  fade_out=0, note=f"{c['id']} {nm}", snap="ДО" not in (note + when)))
+                                  fade_out=0, note=f"{c['id']} {nm}", snap="ДО" not in (note + when), cid=f"{c['id']}:{k}"))
     # книга собрана не вся — у последней собранной части звук не гасим (он продолжится в следующей части)
     complete = len(starts) >= len(rows)
     t_end = stop_at if stop_at is not None else \
@@ -597,7 +908,9 @@ def main():
     kit = find_kit(a.kit)
     if kit is None:
         sys.exit("звуковой комплект не найден: положите Nox_…zip в Загрузки или распакуйте в D:\\nox_audiobook\\zvuk")
-    print(f"  звуковой комплект: {kit}", flush=True)
+    _ki = kit_info(kit)
+    print(f"  звуковой комплект: {kit}" + (" (с готовыми петлями фона)" if _ki["gen"] > 1 else " (прежний: фоны собираются на месте)"),
+          flush=True)
     cues = json.loads((kit / "cues_book1.json").read_text(encoding="utf-8"))
     used_beds = sorted({x for c in cues if c["layer"] == "A" and c["action"] == "bed" for x in c["target"].split("+") if x})
     ensure_beds(kit, used_beds)
@@ -658,14 +971,15 @@ def run_once(a, n, np, st, kit, cues, music_dur, ff, assets, variants, root):
             if rid in id2i:
                 starts[id2i[rid]] = (off + s, off + e)
         off += d
-    items, missed = build_timeline(rows, starts, cues, kit, music_dur, a)
+    nofile = []
+    items, missed = build_timeline(rows, starts, cues, kit, music_dur, a, nofile)
     out_root = root / "parts_zvuk"
     (out_root / "timeline").mkdir(parents=True, exist_ok=True)
     if missed:
         (out_root / "timeline" / "ne_naydeno.txt").write_text(
             "\n".join(f"{c.get('id')}\t{c.get('chapter')}\t{c.get('anchor', '')[:80]}" for c in missed), encoding="utf-8")
     print(f"  частей с картой времени: {len(parts)} ({off / 60:.0f} мин); предметов на дорожках: {len(items)}; "
-          f"якорей не найдено: {len(missed)}", flush=True)
+          f"якорей не найдено: {len(missed)}" + (f"; НЕТ ФАЙЛОВ в комплекте: {len(nofile)}" if nofile else ""), flush=True)
     want = set()
     for chunk in a.parts.split(","):
         if "-" in chunk:

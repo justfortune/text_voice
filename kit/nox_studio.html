@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Нокс Студия</title>
-<!-- NOX_STUDIO 2026-11-11g · интерфейс «Нокс Студии»; сервер — nox_studio.py. Без внешних библиотек: работает без сети. -->
+<!-- NOX_STUDIO 2026-11-11i · интерфейс «Нокс Студии»; сервер — nox_studio.py. Без внешних библиотек: работает без сети. -->
 <style>
 :root{
   --paper:#E8ECEA; --sheet:#FBFCFA; --ink:#17202A; --ink2:#5B6875; --rule:#CBD3CF; --tape:#DCE2DF;
@@ -81,6 +81,7 @@ button.ghost{border-color:transparent;padding:5px 7px}
 .dlg .snds{max-height:46vh;min-height:120px;overflow:auto;border:1px solid var(--rule)}
 .dlg .snd{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:3px 10px 3px 4px;cursor:pointer;border-bottom:1px solid var(--rule)}
 .dlg .snd:hover{background:var(--hover)} .dlg .snd span{overflow-wrap:anywhere} .dlg .snd small{color:var(--ink2);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dlg .snd span i{display:block;font-style:normal;font-size:11.5px;color:var(--ink2);overflow-wrap:anywhere}
 .dlg .snd button svg{width:12px;height:12px;display:block}
 #mini{display:block;width:100%;height:16px;cursor:pointer;border-top:1px solid var(--rule)}
 
@@ -1426,6 +1427,7 @@ function hexA(hex, a){ const n = parseInt(hex.slice(1), 16); return "rgba(" + (n
 function fit(c){ const r = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight; if(c.width !== Math.round(w*r) || c.height !== Math.round(h*r)){ c.width = Math.round(w*r); c.height = Math.round(h*r); } const g = c.getContext("2d"); g.setTransform(r,0,0,r,0,0); return [g, w, h]; }
 function draw(){
   const p = S.part; if(!p) return;
+  laneSize();
   const [g, W, H] = fit(cv), ink = css("--ink"), ink2 = css("--ink2"), rule = css("--rule"), blue = css("--blue"), red = css("--red"), stamp = css("--stamp");
   g.clearRect(0, 0, W, H);
   const span = W / S.zoom;
@@ -1492,28 +1494,39 @@ const CUE_KINDS = ["sfx", "amb", "mus"], CUE_NAME = {sfx:"Звук", amb:"Фон
 const CUE_VAR = {sfx:"--sfx", amb:"--amb", mus:"--mus"};
 const SND_RE = /\.(wav|mp3|ogg|oga|flac|m4a|aac|opus|wma|aif|aiff)$/i;
 function cueOf(id){ return S.part && S.part.cues ? S.part.cues.find(c => c.id === id) : null; }
+// Высота дорожки: обычно 22; когда на ней 3–4 звука сразу (несколько петель фона) — по 11 на строку, чтобы подписи читались
+function laneH(kd){ const r = ((S.part && S.part.laneRows) || {})[kd] || 1; return r > 2 ? 11 * r : 22; }
+function laneSize(){                                           // лента подрастает ровно на высоту дорожек
+  const want = S.showCues && S.part ? (136 + CUE_KINDS.reduce((a, k) => a + laneH(k) + 4, 0)) + "px" : "";
+  if(cv.style.height !== want) cv.style.height = want;
+}
 function geom(){
   const H = cv.clientHeight, RH = 22, TY = RH + 6, lanes = S.showCues ? 3 : 0, LH = 22, LG = 4;
-  const LT = H - 6 - lanes * (LH + LG);
-  return {RH, TY, TH:(lanes ? LT - 2 : H - 8) - TY, LH, LG, LT, lanes};
+  const LHs = CUE_KINDS.map(laneH), LT = H - 6 - (lanes ? LHs.reduce((a, b) => a + b + LG, 0) : 0);
+  return {RH, TY, TH:(lanes ? LT - 2 : H - 8) - TY, LH, LHs, LG, LT, lanes};
 }
-function laneY(kind){ const G = geom(); return G.LT + G.LG + CUE_KINDS.indexOf(kind) * (G.LH + G.LG); }
-function laneAt(y){ const G = geom(); if(!G.lanes || y < G.LT) return null; const k = Math.floor((y - G.LT - G.LG / 2) / (G.LH + G.LG)); return CUE_KINDS[Math.max(0, Math.min(2, k))]; }
+function laneY(kind){ const G = geom(), i = CUE_KINDS.indexOf(kind); let y = G.LT + G.LG; for(let j = 0; j < i; j++) y += G.LHs[j] + G.LG; return y; }
+function laneAt(y){
+  const G = geom(); if(!G.lanes || y < G.LT) return null;
+  let top = G.LT + G.LG / 2;
+  for(let i = 0; i < 3; i++){ const h = G.LHs[i] + G.LG; if(y < top + h || i === 2) return CUE_KINDS[i]; top += h; }
+}
 function cueSpan(c){ return S.drag && S.drag.id === c.id ? [S.drag.t0, S.drag.t1] : [c.t0, c.t1]; }
 function layoutCues(p){
   p.laneRows = {sfx:1, amb:1, mus:1};
   for(const kd of CUE_KINDS){
     const ends = [];
     for(const c of (p.cues || []).filter(x => x.kind === kd).sort((a, b) => a.t0 - b.t0)){
-      let r = ends.findIndex(e => e <= c.t0 + 0.02);
-      if(r < 0) r = ends.length < 3 ? ends.length : 2;
+      const lap = kd === "sfx" ? 0.02 : 2.6;                   // фон и музыка сменяются с перекрытием на затухание — это та же строка
+      let r = ends.findIndex(e => e <= c.t0 + lap);
+      if(r < 0) r = ends.length < 4 ? ends.length : 3;
       ends[r] = Math.max(ends[r] || 0, c.t1); c.row = r;
     }
     p.laneRows[kd] = Math.max(1, ends.length);
   }
 }
 function cueBox(c){                                            // полоска звука на холсте: [x0, y, ширина, высота]
-  const G = geom(), [a, b] = cueSpan(c), rows = (S.part.laneRows || {})[c.kind] || 1, h = G.LH / rows;
+  const G = geom(), [a, b] = cueSpan(c), rows = (S.part.laneRows || {})[c.kind] || 1, h = G.LHs[CUE_KINDS.indexOf(c.kind)] / rows;
   const x0 = (a - S.scrollT) * S.zoom, x1 = (b - S.scrollT) * S.zoom;
   return [x0, laneY(c.kind) + (c.row || 0) * h, Math.max(x1 - x0, 6), h - (rows > 1 ? 1 : 0)];
 }
@@ -1548,7 +1561,7 @@ function drawLanes(g, W, t0, ink, ink2){
   g.textBaseline = "middle";
   for(const kd of CUE_KINDS){
     const y = laneY(kd);
-    g.fillStyle = hexA(ink.length === 7 ? ink : "#17202A", p.mix.on[kd] ? 0.05 : 0.02); g.fillRect(0, y, W, G.LH);
+    g.fillStyle = hexA(ink.length === 7 ? ink : "#17202A", p.mix.on[kd] ? 0.05 : 0.02); g.fillRect(0, y, W, G.LHs[CUE_KINDS.indexOf(kd)]);
   }
   for(const c of p.cues){
     const [x0, y, w, h] = cueBox(c);
@@ -1614,19 +1627,27 @@ async function uploadSound(file){
   } finally { t.remove(); }
 }
 function pickFromPC(){ return new Promise(res => { const f = $("#sndFile"); f.value = ""; f.onchange = () => res(f.files && f.files[0] ? f.files[0] : null); f.click(); }); }
-function soundDialog(title, onChoose){
-  dialog('<h3>' + esc(title) + '</h3><input id="sq" type="search" placeholder="Поиск по названию: дверь, door, шаги…" autocomplete="off"><div class="snds" id="slist"></div><p class="note" id="sinfo"></p>',
+const SND_KIND = {mus:"музыка", amb:"фон", sfx:"звук", dlg:"вставка игры"};
+// hint — с чего начать поиск (подпись заглушки): сразу видны похожие звуки и другие варианты того же; набор с клавиатуры его заменяет
+function soundDialog(title, onChoose, kind, hint){
+  dialog('<h3>' + esc(title) + '</h3><input id="sq" type="search" placeholder="Поиск по-русски или по имени файла: дверь, шаги, волк, прибой, door…" autocomplete="off"><div class="snds" id="slist"></div><p class="note" id="sinfo"></p>',
     [["Отмена"], ["Открыть файл с ПК…", async () => { const f = await pickFromPC(); if(!f) return; try { const s = await uploadSound(f); onChoose(s); } catch(e){ fail(e); } }, "pri"]]);
-  const q = $("#sq"), list = $("#slist"); let timer = 0, seq = 0;
+  const q = $("#sq"), list = $("#slist"); let timer = 0, seq = 0, first = !!hint;
+  if(hint) q.value = hint;
   const load = async () => {
     const my = ++seq;
     try {
-      const r = await api("/api/sounds?q=" + encodeURIComponent(q.value));
+      const r = await api("/api/sounds?q=" + encodeURIComponent(q.value) + "&kind=" + encodeURIComponent(kind || ""));
       if(my !== seq) return;
-      list.innerHTML = r.sounds.map(s => { const cut = s.name.lastIndexOf("/"), base = s.name.slice(cut + 1), dir = cut > 0 ? s.name.slice(0, cut) : "";
-          return '<div class="snd" data-f="' + esc(s.file) + '" data-name="' + esc(base) + '"><button class="ghost" data-play title="Прослушать">' + ICON.play + '</button><span>' + esc(base) + '</span><small>' + (s.lib === "my" ? "мой файл" : "комплект" + (dir ? ": " + esc(dir) : "")) + (s.dur ? ", " + s.dur.toFixed(1) + " с" : "") + '</small></div>'; }).join("")
-        || '<p class="note">Ничего не найдено. Откройте файл с компьютера — он попадёт в библиотеку книги.</p>';
-      $("#sinfo").textContent = r.total > r.sounds.length ? "Показаны первые " + r.sounds.length + " из " + r.total + " — уточните поиск." : (r.total ? "Звуков: " + r.total + (r.kit ? ". Комплект: " + r.kit : "") : "");
+      if(first && !r.total){ first = false; q.value = ""; return load(); }     // по подписи ничего похожего — показать всю библиотеку
+      first = false;
+      list.innerHTML = r.sounds.map(s => {
+          const ttl = s.title || s.name, sub = s.lib === "my" ? "" : [s.sub, s.name !== ttl ? s.name : ""].filter(Boolean).join(" · ");
+          return '<div class="snd" data-f="' + esc(s.file) + '" data-name="' + esc(ttl) + '"><button class="ghost" data-play title="Прослушать">' + ICON.play + '</button><span>' + esc(ttl) + (sub ? '<i>' + esc(sub) + '</i>' : "") + '</span><small>'
+            + (s.lib === "my" ? "мой файл" : (SND_KIND[s.kind] || "комплект")) + (s.dur ? ", " + s.dur.toFixed(1) + " с" : "") + '</small></div>'; }).join("")
+        || '<p class="note">Ничего не найдено. Попробуйте другое слово («дверь», «шаги», «гибель», «колокол») или откройте файл с компьютера — он попадёт в библиотеку книги.</p>';
+      $("#sinfo").textContent = (r.fixed ? "Раскладка исправлена: искал «" + r.fixed + "». " : "") + (r.partial ? "Все слова разом не нашлись — показаны похожие. " : "")
+        + (r.total > r.sounds.length ? "Показаны первые " + r.sounds.length + " из " + r.total + " — уточните поиск." : (r.total ? "Звуков: " + r.total + (r.kit ? ". Комплект: " + r.kit : "") : ""));
     } catch(e){ fail(e); }
   };
   q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(load, 220); });
@@ -1635,7 +1656,7 @@ function soundDialog(title, onChoose){
     if(e.target.closest("[data-play]")){ au.pause(); aux.src = "/audio/sound?f=" + encodeURIComponent(row.dataset.f); aux.volume = 1; aux.play().catch(()=>{}); return; }
     aux.pause(); closeDialog(); onChoose({file:row.dataset.f, name:row.dataset.name});
   });
-  load(); q.focus();
+  load(); q.focus(); q.select();
 }
 // ---- действия с заглушкой
 async function cueSet(id, body){ try { const r = await api("/api/cue", Object.assign({part:S.n, id}, body)); setPart(r.part); return r; } catch(e){ fail(e); drawInsp(); } }
@@ -1668,7 +1689,7 @@ function cueHTML(c){
   let h = '<h2>' + CUE_NAME[c.kind] + '<span class="chip ' + (c.cv ? "edited" : "draft") + '">' + (c.cv ? "со звуком" : "заглушка") + '</span></h2>'
         + '<div class="meta num">' + fmt(c.t0) + ' – ' + fmt(c.t1) + ', ' + len.toFixed(1) + ' с, у фразы № ' + esc(c.no) + (c.cont ? " (идёт с прошлой части)" : "") + (c.cut ? " (до конца части)" : "") + '</div>';
   h += '<label class="f" for="cLabel">Что это</label><input id="cLabel" type="text" list="cLabels" value="' + esc(c.label) + '" autocomplete="off"><datalist id="cLabels">' + labels.map(l => '<option value="' + esc(l) + '">').join("") + '</datalist>';
-  h += '<label class="f">Звуковой файл</label><div class="cfile' + (c.cv ? "" : " none") + '">' + (c.cv ? esc(c.fname) + (c.shared ? " — общий для всех «" + esc(c.label) + "»" : "") : "Файла нет: заглушка молчит и в готовую часть не попадёт.") + '</div>';
+  h += '<label class="f">Звуковой файл</label><div class="cfile' + (c.cv ? "" : " none") + '">' + (c.cv ? esc(c.ftitle && c.ftitle !== c.fname ? c.ftitle + " (" + c.fname + ")" : c.fname) + (c.shared ? " — общий для всех «" + esc(c.label) + "»" : "") : "Файла нет: заглушка молчит и в готовую часть не попадёт.") + '</div>';
   h += '<div class="tools"><button id="cPick">Выбрать звук</button><button id="cOpen">Открыть файл с ПК…</button>' + (c.file ? '<button id="cNoFile" class="ghost">Убрать файл</button>' : "") + '</div>';
   h += '<label class="chk"><input type="checkbox" id="cAll"' + (same ? " checked" : "") + '> тот же файл — всем «' + esc(c.label) + '» без своего' + (same ? " (ещё " + same + " в этой части)" : "") + '</label>';
   h += '<label class="f" for="cVol">Громкость <span id="cVolV" class="num">' + Math.round(c.vol * 100) + ' %</span></label><input id="cVol" type="range" min="0" max="2" step="0.05" value="' + c.vol + '">';
@@ -1684,6 +1705,7 @@ function cueHTML(c){
   h += '<div class="acts"><button id="cPlay"' + (c.cv ? "" : " disabled") + '>Прослушать</button><button id="cHere">С голосом</button><button id="cOn">' + (c.on ? "Выключить" : "Включить") + '</button><button id="cCopy" title="Такой же звук сразу следом — его можно утащить на нужное место">Копия</button><button id="cDel" class="ghost">Убрать</button></div>';
   if(!S.part.mix.on[c.kind]) h += '<div class="note">Дорожка «' + LANE_NAME[c.kind] + '» сейчас выключена целиком — включите её в сводке части (клавиша Esc).</div>';
   if(c.why) h += '<div class="orig">' + (c.src === "kit" ? "" : (c.kind === "mus" ? "Почему здесь — " : "Найдено по тексту: ")) + esc(c.why) + '</div>';
+  if(c.src === "kit" && c.mine) h += '<div class="note">Вы меняли этот звук партитуры — при её обновлении ваши правки останутся.</div>';
   h += '<p class="note">Полоску можно тащить по ленте, за правый край — менять длину. Файл wav или mp3 можно перетащить на неё прямо из папки.</p>';
   return h;
 }
@@ -1703,7 +1725,8 @@ function bindCue(c){
   on("#cOn", "click", () => cueSet(c.id, {set:{on:!c.on}}));
   on("#cDel", "click", () => cueDel(c.id));
   on("#cNoFile", "click", () => cueSet(c.id, {set:{file:null}}));
-  on("#cPick", "click", () => soundDialog("Звук для «" + c.label + "»", snd => assignSound(c, snd)));
+  on("#cPick", "click", () => soundDialog("Звук для «" + c.label + "»", snd => assignSound(c, snd), c.kind,
+      c.kind !== "mus" && c.label && c.label.toLowerCase() !== CUE_NAME[c.kind].toLowerCase() ? c.label.replace(/\(.*?\)/g, " ").trim() : ""));
   on("#cOpen", "click", async () => { const f = await pickFromPC(); if(!f) return; try { assignSound(c, await uploadSound(f)); } catch(e){ fail(e); } });
 }
 async function cueDel(id){ try { const r = await api("/api/cue", {part:S.n, id, delete:true}); S.cue = null; setPart(r.part); toast("Звук убран (Ctrl+Z — вернуть)"); } catch(e){ fail(e); } }
@@ -1715,6 +1738,10 @@ function soundsHTML(p){
       + '<input type="range" data-lanev="' + k + '" min="0" max="1" step="0.01" value="' + p.mix[k] + '" aria-label="Громкость дорожки ' + LANE_NAME[k] + '"><span class="num" data-lanet="' + k + '">' + Math.round(p.mix[k] * 100) + ' %</span>').join("") + '</div>';
   h += '<div class="acts"><button id="cuScan">Найти места по тексту</button><button id="cuAddS">+ звук</button><button id="cuAddA">+ фон</button><button id="cuAddM">+ музыка</button></div>';
   if(S.score && S.score.have) h += '<div class="acts"><button id="cuKit">' + (S.score.on_lanes ? "Обновить партитуру книги" : "Взять партитуру книги") + '</button></div>';
+  if(S.score && S.score.busy) h += '<p class="note">Распаковывается новый звуковой комплект из Загрузок: ' + S.score.busy.pct + ' %. Прежний остаётся на месте.</p>';
+  else if(S.score && S.score.error) h += '<p class="note">Новый звуковой комплект не распаковался: ' + esc(S.score.error) + '. Работаю с прежним. <button id="kitUnpack" class="ghost">Попробовать ещё раз</button></p>';
+  else if(S.score && S.score.wait) h += '<p class="note">В Загрузках лежит новый звуковой комплект: ' + esc(S.score.wait) + '. <button id="kitUnpack" class="ghost">Распаковать</button></p>';
+  else if(S.score && S.score.stale) h += '<p class="note">Звуков партитуры из прежнего комплекта на дорожках: ' + S.score.stale + '. Они звучат как раньше; «Обновить партитуру книги» возьмёт их из нового комплекта — ваши правки сохранятся.</p>';
   if(autoEmpty) h += '<div class="acts"><button id="cuClear" class="ghost">Убрать пустые заглушки: ' + autoEmpty + '</button></div>';
   h += '<p class="note">Заглушка — подписанное место на ленте («скрип двери», «напряжённая музыка») пока без звука. Щёлкните полоску и выберите файл либо перетащите wav или mp3 из папки прямо на ленту. Проценты — громкость дорожки относительно голоса.</p>';
   const mx = p.export && p.export.mix;
@@ -1732,15 +1759,33 @@ function bindSounds(p){
   on("#cuClear", "click", async () => { try { const r = await api("/api/cues_clear", {part:S.n, what:"empty"}); setPart(r.part); toast("Убрано заглушек: " + r.count + " (Ctrl+Z — вернуть)"); } catch(e){ fail(e); } });
   on("#reExport", "click", () => exportPart(S.n));
   on("#cuKit", "click", cueKitDialog);
+  on("#kitUnpack", "click", async () => { try { await api("/api/kit_unpack", {}); toast("Распаковываю звуковой комплект — это минута; прежний остаётся на месте.", "ok", 8000); await loadState(); drawInsp(); } catch(e){ fail(e); } });
 }
-function cueKitDialog(){
+async function cueKitDialog(){
+  try { S.score = (await api("/api/state")).score || S.score; } catch(e){}     // свежие числа: сколько звуков партитуры правлено и убрано
+  const sc = S.score || {};
+  if(sc.busy){ dialog('<h3>Новый звуковой комплект ещё распаковывается</h3><p>Готово ' + sc.busy.pct + ' % («' + esc(sc.busy.name) + '»). Через минуту партитуру можно будет перенести уже из него.</p>', [["Понятно"]]); return; }
+  let keep = "";
+  if(sc.on_lanes){
+    keep = 'Перенос обновится (сейчас на дорожках ' + sc.on_lanes + ' звуков партитуры). ';
+    if(sc.legacy) keep += 'Он сделан прежней версией студии, поэтому в этот раз заменится целиком, вместе с правками в нём; начиная с этого переноса ваши правки запоминаются. ';
+    else keep += 'Что вы в нём меняли — сдвиг, длину, громкость, свой файл, подпись, выключение — останется вашим' + (sc.mine ? ' (таких звуков: ' + sc.mine + ')' : '') + '; убранные вами звуки не вернутся' + (sc.off ? ' (их ' + sc.off + ')' : '') + '. ';
+  }
+  const canReset = sc.on_lanes && !sc.legacy && (sc.mine || sc.off);
   dialog('<h3>Перенести партитуру звуков книги на дорожки?</h3>'
-      + '<p>У этой книги есть готовая партитура — отметки звуков, фона и музыки, которые сейчас подмешивает go. Они появятся на дорожках всех собранных частей уже со своими файлами и громкостями: их станет видно, можно будет двигать, выключать и заменять.</p>'
-      + '<p>' + (S.score.on_lanes ? 'Прежний перенос (' + S.score.on_lanes + ' звуков) заменится целиком, вместе с вашими правками в нём. ' : '') + 'Звуки, которые вы поставили сами, и найденные по тексту заглушки останутся. Отменить — Ctrl+Z.</p>',
+      + '<p>У этой книги есть готовая партитура — отметки звуков, фона и музыки. Они появятся на дорожках всех собранных частей уже со своими файлами и громкостями и с подписями по-русски: их станет видно, можно будет двигать, выключать и заменять.</p>'
+      + '<p>' + keep + 'Звуки, которые вы поставили сами, и найденные по тексту заглушки останутся. Отменить — Ctrl+Z.</p>'
+      + (sc.kit ? '<p class="note">Звуковой комплект: ' + esc(sc.kit) + (sc.gen > 1 ? ' — с готовыми петлями фона' : '') + (sc.stale ? '. Сейчас на дорожках ' + sc.stale + ' звуков из прежнего комплекта — после переноса они возьмутся из этого' : '') + '.</p>' : '')
+      + (canReset ? '<label class="chk"><input type="checkbox" id="kitReset"> взять партитуру начисто: сбросить мои правки в её звуках и вернуть убранные</label>' : ''),
       [["Отмена"], ["Перенести", async () => {
+        const reset = !!($("#kitReset") && $("#kitReset").checked);
         $("#load").hidden = false; $("#load").textContent = "Переношу партитуру книги на дорожки…";
-        try { const r = await api("/api/cues_kit", {part:S.n}); S.showCues = true; if(r.part) setPart(r.part); await loadState(); applyCues(true); drawInsp();
-              toast("На дорожках звуков из партитуры: " + r.new + " (по " + r.parts + " собранным частям)." + (r.missed ? " Отметок без места: " + r.missed + " — их главы ещё не собраны." : ""), "ok", 12000); }
+        try { const r = await api("/api/cues_kit", {part:S.n, reset}); S.showCues = true; if(r.part) setPart(r.part); await loadState(); applyCues(true); drawInsp();
+              toast("На дорожках звуков из партитуры: " + r.new + " (по " + r.parts + " собранным частям)."
+                + (r.kept ? " Ваших правок сохранено: " + r.kept + "." : "") + (r.gone ? " Убранных вами не возвращено: " + r.gone + "." : "")
+                + (r.missed ? " Отметок, не нашедших свою фразу в тексте книги: " + r.missed + " — список в журнале." : "")
+                + (r.skipped ? " Пропущено (нет файла): " + r.skipped + "." : "")
+                + (r.nofile ? " В комплекте нет файлов для " + r.nofile + " имён — подробности в журнале." : ""), r.nofile ? "red" : "ok", 14000); }
         catch(e){ fail(e); }
         $("#load").hidden = true;
       }, "pri"]]);
@@ -1766,7 +1811,8 @@ cv.addEventListener("mousedown", e => {
 });
 window.addEventListener("mousemove", e => {
   const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  if(!press || !press.hit){ if(e.target === cv){ const h = cueAt(x, y); cv.style.cursor = h ? (h.edge ? "ew-resize" : "grab") : "pointer"; } return; }
+  if(!press || !press.hit){ if(e.target === cv){ const h = cueAt(x, y); cv.style.cursor = h ? (h.edge ? "ew-resize" : "grab") : "pointer";
+      const tip = h ? h.c.label + " — " + LANE_NAME[h.c.kind] + ", " + fmt(h.c.t0, 1) + "–" + fmt(h.c.t1, 1) + (h.c.on ? "" : ", выключен") : ""; if(cv.title !== tip) cv.title = tip; } return; }
   const dx = x - press.x; if(!S.drag && Math.abs(dx) < 4) return;
   const c = press.hit.c, dt = dx / S.zoom, tot = S.part.total;
   if(press.hit.edge) S.drag = {id:c.id, mode:"len", t0:c.t0, t1:Math.max(c.t0 + 0.1, Math.min(c.t1 + dt, tot))};
@@ -2012,7 +2058,7 @@ function helpDialog(){
     ["Говорит не тот герой, слишком быстро, нет паузы", "У выбранной фразы справа: «Кто говорит» — выберите роль и нажмите «Озвучить заново». «Скорость фразы» и «Пауза перед фразой» меняются сразу, переозвучивать не нужно. Ctrl+Z отменяет последнюю правку."],
     ["Не та интонация", "Рядом с кнопкой «Озвучить заново» выберите размах: «три варианта на выбор» — три дубля, оставьте лучший; «всё предложение» и «весь абзац» — соседние куски переозвучатся вместе, интонация выйдет цельной. Enter — послушать фразу, C — послушать её с соседями."],
     ["Закрепить и получить готовый файл", "L — закрепить фразу: правила и конвейер её больше не изменят. «Закрепить часть» закрепляет все фразы и пишет готовый файл в папку gotovo\\chasti (и на Яндекс Диск). Главу отдельным файлом собирает окно «Части и главы»."],
-    ["Звуки, фон и музыка", "«Звуки и музыка» открывает три дорожки под голосом. В сводке части (Esc) нажмите «Найти места по тексту»: на дорожках появятся подписанные заглушки — «скрип двери», «напряжённая музыка». Заглушка молчит, пока у неё нет файла. Щёлкните полоску, затем «Выбрать звук» или «Открыть файл с ПК»; либо перетащите wav или mp3 из папки прямо на полоску или на свободное место дорожки. Полоску можно тащить мышью, за правый край — менять длину. Громкость есть у каждой полоски и у всей дорожки; дорожку можно выключить. При закреплении части рядом ляжет второй файл — со звуком (папка gotovo\\chasti_so_zvukom)."],
+    ["Звуки, фон и музыка", "«Звуки и музыка» открывает три дорожки под голосом. В сводке части (Esc) нажмите «Найти места по тексту»: на дорожках появятся подписанные заглушки — «скрип двери», «напряжённая музыка». Заглушка молчит, пока у неё нет файла. Щёлкните полоску, затем «Выбрать звук» или «Открыть файл с ПК»; в окне выбора ищите по-русски — «дверь», «шаги», «волк», «прибой»: у звуков игры русские названия, первыми идут подходящие дорожке (музыка — для музыки, фон — для фона); либо перетащите wav или mp3 из папки прямо на полоску или на свободное место дорожки. Полоску можно тащить мышью, за правый край — менять длину. Громкость есть у каждой полоски и у всей дорожки; дорожку можно выключить. При закреплении части рядом ляжет второй файл — со звуком (папка gotovo\\chasti_so_zvukom). «Взять партитуру книги» ставит на дорожки готовую разметку звуков, фона и музыки для всех собранных частей; когда соберутся новые части — «Обновить партитуру книги»: ваши правки в её звуках сохраняются, убранные вами звуки не возвращаются. Новый звуковой комплект (архив Nox_… в Загрузках) студия распаковывает сама при запуске."],
     ["Журнал и движок", "Полоса «Журнал» внизу окна (клавиша J) показывает, что студия делает прямо сейчас, вывод движка озвучки, загрузку видеокарты и итог самопроверки. Движок запускается кнопкой справа вверху, модель грузится около минуты. Пока go озвучивает книгу, отдельный движок не нужен: воркеры go сами берут заявки студии между своими фразами."],
     ["Вставить фразу, которой нет в книге", "Выберите фразу, после которой нужна новая, и нажмите Insert (или кнопку «Вставить фразу после этой» под списком дублей). Впишите текст, выберите, кто говорит. «Вставить и озвучить» — фразу прочтёт движок, ударения расставит сам; потом их можно править, как у любой фразы. «Вставить без озвучки» — если хотите начитать сами. Вставка помечена «вст.» и пунктиром слева; рукопись и конвейер о ней не знают, она живёт в студии и попадает в готовый файл части. Текст вставки меняется клавишей F2, удаляется вставка клавишей Delete; и то и другое отменяет Ctrl+Z."],
     ["Своя запись вместо синтеза, обрезка записи", "Надиктовали фразу сами — выберите её и нажмите U («Своя запись с компьютера») либо перетащите файл mp3 или wav из папки на правую панель. Запись становится новым дублем и встаёт в часть; прежние дубли и черновая запись остаются в списке, исходный файл хранится в studio\\imports. Громкость подравнивается к книге, тишина по краям обрезается сама. Кнопка с ножницами у любой записи (клавиша T) открывает обрезку: потяните края или впишите секунды, «Прослушать» играет то, что останется. Файл при этом не меняется — обрезку можно поправить или снять («Целиком»). Начитали одним файлом несколько фраз подряд — дайте запись первой из них, поставьте конец там, где кончается эта фраза («До паузы» находит паузы сам, колесо мыши меняет масштаб), и нажмите «Применить и перейти»: следующая фраза получит ту же запись с этого места. Так, фраза за фразой, раскладывается весь файл; копий на диске при этом не появляется. Свою запись не трогают ни правила чтения, ни «Озвучить все изменённые»."],

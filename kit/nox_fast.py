@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-11g
+# NOX_KIT 2026-11-11i
 """
 nox_fast.py — быстрый воркер озвучки для nox_audiobook на движке faster-qwen3-tts (CUDA-графы).
 

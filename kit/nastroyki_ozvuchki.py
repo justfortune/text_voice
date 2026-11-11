@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-11g
+# NOX_KIT 2026-11-11i
 """
 nastroyki_ozvuchki.py — конфигуратор озвучки: таблица «Настройки озвучки.xlsx» в папке книги (D:\\kniga1a и т.п.).
 

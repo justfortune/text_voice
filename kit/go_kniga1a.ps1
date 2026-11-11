@@ -63,7 +63,7 @@ Use-Newest "nox_part*.py" "nox_part.py"
 Use-Newest "nox_stress*.py" "nox_stress.py"
 Use-Newest "nox_voices*.py" "nox_voices.py"
 # Все файлы комплекта должны быть одной версии: старый файл в Загрузках (не скачался) — стоп, с понятным списком
-$KIT = "NOX_KIT 2026-11-11g"
+$KIT = "NOX_KIT 2026-11-11i"
 $env:NOX_FROM_GO = "1"      # prep и установщик студии узнают, что их запустил go: их советы для ручного запуска не печатаются
 $kitFiles = @("prep_kniga1a.ps1", "nox_fast.py", "verify_k1a.py", "voicecheck_k1a.py", "nastroyki_ozvuchki.py", "razmetka_k1a.py", "zvuk_k1a.py",
               "nox_part.py", "nox_stress.py", "nox_voices.py")
@@ -251,7 +251,7 @@ if ($prepReady -and $prepOld -and ($prepOld.Trim() -eq $prepSig)) {
     [IO.File]::WriteAllText("$Root\work\prep.sig", $prepSig, (New-Object System.Text.UTF8Encoding $false))
 }
 # файлы работы по частям, самопроверки ударений и банка голосов — в папку книги
-foreach ($f in @("nox_part.py", "nox_stress.py", "nox_voices.py")) { if (Test-Path "$dl\$f") { Copy-Item "$dl\$f" "$Root\$f" -Force } }
+foreach ($f in @("nox_part.py", "nox_stress.py", "nox_voices.py", "zvuk_k1a.py")) { if (Test-Path "$dl\$f") { Copy-Item "$dl\$f" "$Root\$f" -Force } }
 
 if ($ByParts) { Write-Host "=== Аудит слоя текста всей книги не нужен: записи текущей части сверяются перед её озвучкой (ниже)" -ForegroundColor Cyan }
 else { Write-Host "=== Аудит слоя текста: что именно будет прочитано; переозвучка только изменившегося" -ForegroundColor Cyan }

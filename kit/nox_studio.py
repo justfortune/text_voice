@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_STUDIO 2026-11-11g
+# NOX_STUDIO 2026-11-11i
 """
 nox_studio.py — «Нокс Студия»: ручная правка аудиокниги поверх черновой озвучки.
 
@@ -44,7 +44,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "2026-11-11g"
+VERSION = "2026-11-11i"
 ACUTE = "\u0301"
 GLUE_GAP = 0.12                   # пауза на стыке склеенных записей, с (как между кусками одного предложения)
 WORD_RE = re.compile(r"[А-Яа-яЁё\u0301]+")
@@ -88,6 +88,48 @@ SND_SR = 24000
 SND_EXT = (".wav", ".mp3", ".ogg", ".oga", ".flac", ".m4a", ".aac", ".opus", ".wma", ".aif", ".aiff")
 CUE_KINDS = ("sfx", "amb", "mus")
 CUE_NAME = {"sfx": "звук", "amb": "фон", "mus": "музыка"}
+# Правки автора в звуке, пришедшем из партитуры книги: что именно он менял (остальное при обновлении партитуры берётся из неё)
+KIT_ASPECT = {"pos": ("uid", "at", "off"), "end": ("e_uid", "e_at", "e_off", "len"), "vol": ("vol",), "on": ("on",),
+              "loop": ("loop",), "label": ("label",), "kind": ("kind",), "file": ("file",), "fin": ("fin",),
+              "fout": ("fout",), "foff": ("foff",)}
+KIT_CAT = {"ambient": "окружение", "creatures": "существа", "misc": "разное", "objects": "предметы", "player": "герой",
+           "spells": "заклинания", "staffs_potions": "посохи и зелья", "ui_story": "интерфейс и сюжет", "weapons": "оружие"}
+_LAY_EN = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`"
+_LAY_RU = "йцукенгшщзхъфывапролджэячсмитьбюё"
+_EN2RU, _RU2EN = str.maketrans(_LAY_EN, _LAY_RU), str.maketrans(_LAY_RU, _LAY_EN)
+
+
+def s_norm(s) -> str:
+    return re.sub(r"[^0-9a-zа-я]+", " ", str(s).lower().replace("ё", "е")).strip()
+
+
+def s_stem(w: str) -> str:
+    """Основа слова для поиска: «двери», «дверью» -> «двер»; короткие слова и латиница — как есть."""
+    if len(w) < 4 or not re.search(r"[а-я]", w):
+        return w
+    m = re.sub(r"(?:ами|ями|ов|ев|ом|ем|ой|ей|ах|ях|ью)$|[аеиоуыэюяйь]{1,2}$", "", w)
+    return m if len(m) >= 3 else w[:3]
+
+
+def s_score(toks, words, hay: str) -> float:
+    """Насколько запись подходит запросу: каждое слово запроса должно найтись (целым словом, началом слова, основой
+    или куском); 0 — не подходит."""
+    tot = 0.0
+    for tk in toks:
+        if tk in words:
+            b = 3.0
+        elif any(w.startswith(tk) for w in words):
+            b = 2.5
+        elif len(tk) >= 4 and any(w.startswith(s_stem(tk)) for w in words):
+            b = 2.0
+        elif tk in hay:
+            b = 1.0
+        else:
+            return 0.0
+        tot += b
+    return tot
+
+
 MIX_DEF = {"sfx": 0.33, "amb": 0.12, "mus": 0.10}        # громкость дорожек относительно голоса — как у сведения конвейера
 
 
@@ -350,7 +392,9 @@ class Studio:
         self.final_parts_mix = root / "gotovo" / "chasti_so_zvukom"
         self.final_ch_mix = root / "gotovo" / "glavy_so_zvukom"
         self.sounds_dir = self.dir / "sounds"
-        self._snd, self._lvl, self._kit, self._score = {}, {}, None, None
+        self._snd, self._lvl, self._cat, self._kst, self._zv = {}, {}, None, None, None
+        self.kit_job = None                                    # идёт распаковка нового звукового комплекта: {name, pct, error}
+        self._kit_lock = threading.Lock()                      # распаковка — одна за раз
         self._fsha, self._loops = {}, {}
         self.slock = threading.Lock()            # расшифровка звуков и клипы — по одному (окно просит их пачкой)
         self.qdir = n.WORK / "studio_queue"
@@ -666,7 +710,7 @@ class Studio:
             raise Oops(f"правки этой книги записаны более новой версией студии ({was}), а запущена {VERSION}. "
                        "Скачайте свежий комплект и запустите студию из него — правки целы, ничего не изменено")
         if f.exists() and was != VERSION:
-            self._upgraded = was or "до 2026-11-11g"
+            self._upgraded = was or "до 2026-11-11i"
             d = self.backup_dir / f"pered_{VERSION}_{time.strftime('%Y%m%d_%H%M%S')}"
             try:                                           # всё состояние правок — как оставила прежняя версия
                 d.mkdir(parents=True, exist_ok=True)
@@ -689,7 +733,7 @@ class Studio:
     @staticmethod
     def store_defaults(st: dict) -> dict:
         for k, d in (("segs", {}), ("rules", []), ("parts", []), ("chapters", {}), ("orphans", []), ("seq", 0),
-                     ("cues", []), ("cue_seen", []), ("cue_orphans", []), ("sound_map", {}),
+                     ("cues", []), ("cue_seen", []), ("cue_orphans", []), ("sound_map", {}), ("kit_off", []),
                      ("mix", dict(MIX_DEF, on={"sfx": True, "amb": True, "mus": True}))):
             st.setdefault(k, d)
         for k, d in MIX_DEF.items():
@@ -1832,8 +1876,7 @@ class Studio:
                         orphans=len(self.store["orphans"]), engine=self.engine_view(), mix=self.store["mix"],
                         go=self.go_view(pl),
                         cue_labels=self.cue_labels(), sound_map=self.store["sound_map"],
-                        score=dict(have=self.kit_score() is not None,
-                                   on_lanes=sum(1 for c in self.store["cues"] if c.get("src") == "kit")),
+                        score=self.score_view(),
                         gotovo=dict(parts=str(self.final_parts), chapters=str(self.final_ch), disk=self.disk_dir(False)))
 
     def draft_dur(self, k: int):
@@ -1964,7 +2007,10 @@ class Studio:
             while self.undo:
                 uid, old, label = self.undo.pop()
                 if uid == "#cues":                             # звуки и громкости дорожек — одним снимком
-                    self.store["cues"], self.store["cue_seen"], self.store["sound_map"], self.store["mix"] = json.loads(old)
+                    snap = json.loads(old)
+                    self.store["cues"], self.store["cue_seen"], self.store["sound_map"], self.store["mix"] = snap[:4]
+                    if len(snap) > 4:
+                        self.store["kit_off"] = snap[4]
                     self.save("отмена: " + label)
                     return uid
                 if uid == "#ins":                              # вставка добавлена / удалена / переписана
@@ -2917,31 +2963,211 @@ class Studio:
                 return d
         return None
 
+    def kit_home(self) -> Path:
+        """Общая папка звуковых комплектов: существующая, а если её ещё нет — где ей быть (рядом со студией)."""
+        env = os.environ.get("NOX_ZVUK")
+        return self.kit_dir() or (Path(env) if env else Path(__file__).resolve().parent.parent / "zvuk")
+
+    def zvuk(self):
+        """Сведение конвейера (zvuk_k1a.py из папки книги): у него общие со студией выбор комплекта и расчёт партитуры."""
+        if self._zv is None:
+            self._zv = False
+            if (self.root / "zvuk_k1a.py").exists():
+                try:
+                    import importlib
+                    self._zv = importlib.import_module("zvuk_k1a")
+                except Exception as e:
+                    log(f"zvuk_k1a.py не загрузился ({type(e).__name__}: {e}) — партитура книги недоступна", "warn", "звуки")
+        return self._zv or None
+
+    def kit_state(self, fresh=False) -> dict:
+        """Действующий комплект (лучший из распакованных: новее поколением, затем архивом), остальные распакованные и
+        архив из Загрузок, который лучше их всех и ждёт распаковки. Считается не чаще раза в минуту."""
+        tm = time.time()
+        if not fresh and self._kst is not None and tm - self._kst[0] < 60:
+            return self._kst[1]
+        st = dict(kit=None, zip=None, others=[], gen=0)
+        z, kd = self.zvuk(), self.kit_dir()
+        try:
+            if z is not None and hasattr(z, "kit_pick"):
+                pk = z.kit_pick(self.kit_home())
+                st.update(kit=pk["kit"], zip=pk["zip"], others=pk["others"],
+                          gen=z.kit_info(pk["kit"])["gen"] if pk["kit"] is not None else 0)
+            elif kd is not None:                               # прежний zvuk_k1a (или его нет): первый комплект с партитурой
+                cj = next((x for x in sorted(kd.rglob("cues_book1.json")) if (x.parent / "music").is_dir()), None)
+                st["kit"] = cj.parent if cj else None
+        except Exception as e:
+            log(f"звуковой комплект не определён: {type(e).__name__}: {e}", "warn", "звуки")
+        self._kst = (tm, st)
+        return st
+
+    def kit_active(self):
+        return self.kit_state()["kit"]
+
+    def kit_prepare(self):
+        """В Загрузках лежит архив звукового комплекта лучше всех распакованных — распаковать его (фоном, разово).
+        Прежний комплект остаётся на месте: на его файлы ссылаются звуки, уже стоящие на дорожках."""
+        z = self.zvuk()
+        if z is None or not hasattr(z, "kit_unpack") or not self._kit_lock.acquire(blocking=False):
+            return
+        try:
+            self._kit_unpack(z)
+        finally:
+            self._kit_lock.release()
+
+    def _kit_unpack(self, z):
+        zp = self.kit_state(True)["zip"]
+        if zp is None:
+            self.kit_job = None
+            return
+        job = dict(name=zp["name"], pct=0, error=None)
+        self.kit_job = job
+        log(f"в Загрузках новый звуковой комплект {zp['name']} — распаковываю в {self.kit_home()} "
+            f"(разово, ~{zp['size'] / 1e6:.0f} МБ)", "info", "звуки")
+        try:
+            d = z.kit_unpack(zp, self.kit_home(), progress=lambda a, b: job.__setitem__("pct", int(100 * a / max(1, b))))
+            self.kit_job = None
+            log(f"звуковой комплект распакован: {d.name}. Библиотека звуков уже берёт его; чтобы и звуки партитуры на "
+                "дорожках взялись из него — кнопка «Обновить партитуру книги» (ваши правки в них сохранятся)", "ok", "звуки")
+        except Exception as e:
+            job["error"] = f"{type(e).__name__}: {e}"
+            log(f"звуковой комплект {zp['name']} не распаковался: {e} — работаю с прежним", "warn", "звуки")
+        self._kst, self._cat = None, None
+
+    def kit_tables(self, kit: Path) -> dict:
+        """Таблицы комплекта: русские названия музыки, фонов и звуков игры, длительности, реплики игры."""
+        def table(name):
+            try:
+                with open(kit / name, encoding="utf-8-sig", newline="") as f:
+                    return list(csv.DictReader(f, delimiter=";"))
+            except (OSError, csv.Error, UnicodeError):
+                return []
+
+        def num(v):
+            try:
+                return round(float(str(v).replace(",", ".")), 2)
+            except (TypeError, ValueError):
+                return None
+        sfx = {r.get("логическое_имя") or "": r for r in table("sfx_dictionary.csv")}
+        raw = {}
+        for nm, r in sfx.items():
+            for f in (r.get("файлы") or "").split():
+                raw.setdefault(f.lower(), nm)
+        return dict(mus={(r.get("трек") or "").lower(): r for r in table("music_tracks.csv")},
+                    amb={(r.get("петля") or "").lower(): r for r in table("ambient_loops.csv")}, sfx=sfx, raw=raw,
+                    dur={(r.get("путь") or "").lower(): num(r.get("длит_с")) for r in table("sfx/sfx_index.csv")},
+                    dlg={Path(r.get("файл_в_архиве") or "").stem.lower(): r for r in table("озвучка_диалогов_игры.csv")},
+                    num=num)
+
+    def kit_catalog(self) -> list:
+        """Каталог действующего комплекта для библиотеки звуков: у каждого файла — понятное название по-русски (из
+        таблиц комплекта), вид (музыка, фон, звук, вставка игры), длительность и строка для поиска. Разобранные звуки
+        (sfx) идут первыми; сырой файл игры (sfx_all) показывается, только если его нет среди разобранных."""
+        kit, base = self.kit_active(), self.kit_dir()
+        if kit is None or base is None:
+            return []
+        if self._cat is not None and self._cat[0] == str(kit):
+            return self._cat[1]
+        T = self.kit_tables(kit)
+        out, have, seen = [], set(), set()
+
+        def add(f, kind, title, sub, extra="", dur=None, rank=0):
+            try:
+                rel = f.resolve().relative_to(base.resolve()).as_posix()
+            except (ValueError, OSError):
+                return
+            if rel in have:
+                return
+            have.add(rel)
+            hay = s_norm(" ".join((title or "", f.stem, sub or "", extra or "")))
+            out.append(dict(file="kit:" + rel, name=f.name, title=(title or f.stem)[:120], sub=sub, kind=kind, dur=dur,
+                            lib="kit", rank=rank, hay=hay, words=frozenset(hay.split())))
+
+        def files(d, deep=False):
+            if not d.is_dir():
+                return []
+            it = d.rglob("*") if deep else d.iterdir()
+            return sorted((f for f in it if f.suffix.lower() in SND_EXT and f.is_file()), key=lambda x: str(x).lower())
+        for f in files(kit / "music"):
+            r = T["mus"].get(f.stem.lower()) or {}
+            add(f, "mus", f"{f.stem} — {r['что_это']}" if r.get("что_это") else f.stem, "музыка игры",
+                r.get("где_звучит_у_мага") or "", T["num"](r.get("длит_с")))
+        for f in files(kit / "beds"):
+            r = T["amb"].get(f.stem.lower()) or {}
+            add(f, "amb", r.get("что_это") or f.stem, "фон местности (петля)", r.get("объекты_на_картах") or "")
+        for f in files(kit / "sfx", deep=True):
+            nm, _, rest = f.stem.partition("__")
+            r = T["sfx"].get(nm) or {}
+            seen.add((rest or nm).lower())
+            rp = f.relative_to(kit / "sfx")
+            add(f, "amb" if rp.parts[0] == "ambient" else "sfx", r.get("что_это") or nm,
+                "звук игры" + (": " + " / ".join(KIT_CAT.get(x, x) for x in rp.parts[:-1]) if len(rp.parts) > 1 else ""), nm,
+                T["dur"].get(rp.as_posix().lower()))
+        for f in files(kit / "sfx_all"):
+            if f.stem.lower() in seen:
+                continue
+            nm = T["raw"].get(f.stem.lower()) or ""
+            r = T["sfx"].get(nm) or {}
+            add(f, "sfx", r.get("что_это") or f.stem, "звук игры (файл без разбора)", nm, rank=1)
+        for f in files(kit / "dialog"):
+            r = T["dlg"].get(f.stem.lower()) or {}
+            who, txt = (r.get("кто_говорит") or "").strip(), (r.get("русский_текст_реплики") or "").strip()
+            add(f, "dlg", (who + (": " + txt if txt else "")) or f.stem, "реплика игры (английская речь)",
+                (r.get("место_в_игре") or ""), T["num"](r.get("длит_с")), rank=2)
+        for f in files(kit / "movies_audio"):
+            add(f, "dlg", f.stem, "звук ролика игры", rank=2)
+        for f in files(kit, deep=True):                        # всё прочее звуковое в комплекте — по имени файла
+            add(f, "sfx", f.stem, f.parent.relative_to(kit).as_posix(), rank=3)
+        self._cat = (str(kit), out, {x["file"]: x["title"] for x in out})
+        return out
+
     def sound_index(self) -> dict:
         return read_json(self.sounds_dir / "index.json", None) or {}
 
-    def sound_list(self, q: str = "") -> dict:
-        idx, out = self.sound_index(), []
+    def sound_list(self, q: str = "", kind: str = "") -> dict:
+        """Библиотека звуков: свои файлы книги и действующий комплект. Поиск — по русскому названию («дверь», «волк»,
+        «шаги»), имени звука в игре и имени файла; слова — в любом порядке, ё = е, «двери» находит «дверь»; запрос,
+        набранный не в той раскладке, тоже находится. kind (sfx/amb/mus) — что сейчас подбирают: такое идёт первым."""
+        idx, my = self.sound_index(), []
         if self.sounds_dir.is_dir():
             for f in sorted(self.sounds_dir.iterdir(), key=lambda x: x.name.lower()):
                 if f.suffix.lower() in SND_EXT:
                     m = idx.get(f.name) or {}
-                    out.append(dict(file=f.name, name=m.get("name") or f.name, dur=m.get("dur"), lib="my"))
-        kit = self.kit_dir()
-        if kit is not None:
-            if self._kit is None or self._kit[0] != str(kit):
-                fl = []
-                for f in kit.rglob("*"):
-                    if f.suffix.lower() in SND_EXT and f.is_file():
-                        fl.append(f.relative_to(kit).as_posix())
-                        if len(fl) >= 20000:
-                            break
-                self._kit = (str(kit), sorted(fl, key=str.lower))
-            out += [dict(file="kit:" + r, name=r, dur=None, lib="kit") for r in self._kit[1]]
-        words = q.lower().replace("ё", "е").split()
-        if words:
-            out = [x for x in out if all(w in (x["name"] + " " + x["file"]).lower().replace("ё", "е") for w in words)]
-        return dict(total=len(out), sounds=out[:300], kit=str(kit) if kit else None)
+                    nm = m.get("name") or f.name
+                    hay = s_norm(nm + " " + f.name)
+                    my.append(dict(file=f.name, name=nm, title=nm, sub="мой файл", kind="", dur=m.get("dur"), lib="my",
+                                   rank=-1, hay=hay, words=frozenset(hay.split())))
+        kit = self.kit_active()
+        allx = my + self.kit_catalog()
+        pref = lambda x: 0 if (x["lib"] == "my" or not kind or x["kind"] == kind) else 1
+
+        def find(text):
+            toks = s_norm(text).split()
+            if not toks:
+                return None
+            got = [(s_score(toks, x["words"], x["hay"]), x) for x in allx]
+            return [(sc, x) for sc, x in got if sc > 0]
+        hits, fixed = find(q), ""
+        if hits is not None and not hits:                      # ничего: может, запрос набран не в той раскладке
+            for alt in (str(q).lower().translate(_EN2RU), str(q).lower().translate(_RU2EN)):
+                h2 = find(alt) if alt != str(q).lower() else None
+                if h2:
+                    hits, fixed = h2, alt
+                    break
+        partial = False
+        if hits is not None and not hits and len(s_norm(q).split()) > 1:   # все слова разом не нашлись — показать похожее
+            got = []
+            for x in allx:
+                sc = sum(s_score([tk], x["words"], x["hay"]) for tk in s_norm(q).split())
+                if sc > 0:
+                    got.append((sc, x))
+            hits, partial = got, bool(got)
+        if hits is None:
+            res = sorted(allx, key=lambda x: (x["rank"], pref(x)))        # сортировка устойчивая: внутри — порядок каталога
+        else:
+            res = [x for _, x in sorted(hits, key=lambda p: (-p[0], pref(p[1]), p[1]["rank"]))]
+        view = [{k: v for k, v in x.items() if k not in ("hay", "words", "rank")} for x in res[:300]]
+        return dict(total=len(res), sounds=view, kit=str(kit) if kit else None, fixed=fixed, partial=partial, all=len(allx))
 
     def sound_path(self, ref):
         """Ссылка на звук -> файл: имя в библиотеке книги или «kit:путь» в общем комплекте. Наружу из этих папок нельзя."""
@@ -2966,6 +3192,13 @@ class Studio:
         if ref.startswith("kit:"):
             return ref[4:].rsplit("/", 1)[-1]
         return (self.sound_index().get(ref) or {}).get("name") or ref
+
+    def sound_title(self, ref) -> str:
+        """Понятное название звука комплекта (по-русски, из его таблиц); у своих файлов — их имя."""
+        if ref and ref.startswith("kit:"):
+            self.kit_catalog()
+            return (self._cat[2] if self._cat is not None else {}).get(ref) or self.sound_name(ref)
+        return self.sound_name(ref)
 
     def sound_add(self, name: str, data: bytes) -> dict:
         """Файл с компьютера автора -> библиотека звуков книги (копия: исходный файл можно потом двигать и удалять)."""
@@ -3308,6 +3541,7 @@ class Studio:
                     lead=round(float(tt[2]), 1) if tt[2] else 0, fin=c.get("fin"), fout=c.get("fout"), foff=c.get("foff"),
                     bed=bool(c.get("e_uid")), file=c.get("file"), eff=r if p is not None else None,
                     fname=self.sound_name(r) if p is not None else "", shared=bool(p is not None and not c.get("file")),
+                    ftitle=self.sound_title(r) if p is not None else "", mine=bool(c.get("mine")),
                     nat=nat, vol=float(c.get("vol", 1.0)), on=bool(c.get("on", True)), loop=bool(c.get("loop")),
                     src=c.get("src", "manual"), why=c.get("why") or "", conf=c.get("conf"),
                     cv=self.cue_sig(c, tt, ref) if p is not None else None)
@@ -3318,7 +3552,8 @@ class Studio:
         return [self.cue_view(c, tt, ref) for c, tt in self.cues_in(p["a"], p["b"], meta)]
 
     def _cue_undo(self, label: str):
-        self.undo.append(("#cues", jd([self.store["cues"], self.store["cue_seen"], self.store["sound_map"], self.store["mix"]]), label))
+        self.undo.append(("#cues", jd([self.store["cues"], self.store["cue_seen"], self.store["sound_map"], self.store["mix"],
+                                       self.store["kit_off"]]), label))
         del self.undo[:-80]
 
     def _cue_place(self, c: dict, t: float, meta: dict, end=False):
@@ -3371,8 +3606,8 @@ class Studio:
                 if not tt:
                     raise Oops("этого звука уже нет в этой части")
                 c = dict(c0, id=self.next_id("c"), src="manual")
-                c.pop("why", None)
-                c.pop("conf", None)
+                for key in ("why", "conf", "kid", "mine"):
+                    c.pop(key, None)
                 ln = tt[1] - tt[0]
                 t = float(d["t"]) if d.get("t") is not None else tt[1] + 0.3     # по умолчанию — сразу следом
                 t = min(max(t, 0.0), max(meta["total"] - 0.2, 0.0))
@@ -3387,9 +3622,18 @@ class Studio:
                     raise Oops("этого звука уже нет")
                 if d.get("delete"):
                     self.store["cues"] = [x for x in self.store["cues"] if x["id"] != c["id"]]
+                    if c.get("src") == "kit" and c.get("kid"):     # убран автором: обновление партитуры его не вернёт
+                        self.store["kit_off"] = sorted(set(self.store["kit_off"]) | {c["kid"]})
                     what = "звук убран"
                 else:
                     st = d.get("set") or {}
+                    touched = {key for key in ("label", "kind", "vol", "on", "loop", "fin", "fout", "foff", "file") if key in st}
+                    if "len" in st or "te" in d:
+                        touched.add("end")
+                    if "t" in d:
+                        touched |= {"pos", "end"} if c.get("e_uid") else {"pos"}
+                    if touched and c.get("src") == "kit" and c.get("kid"):
+                        c["mine"] = sorted(set(c.get("mine") or []) | touched)
                     if "label" in st:
                         c["label"] = str(st["label"]).strip()[:80] or CUE_NAME[c["kind"]]
                     if "kind" in st and st["kind"] in CUE_KINDS:
@@ -3525,30 +3769,58 @@ class Studio:
             self.save("звук для подписи", {"label": label, "file": ref})
 
     def kit_score(self):
-        """Партитура звуков книги (cues_book1.json из комплекта) и сведение конвейера (zvuk_k1a.py) — есть ли они."""
-        kd = self.kit_dir()
-        if kd is None or not (self.root / "zvuk_k1a.py").exists():
-            return None
-        if self._score is None or self._score[0] != str(kd):
-            cj = next((x for x in sorted(kd.rglob("cues_book1.json")) if (x.parent / "music").is_dir()), None)
-            self._score = (str(kd), cj.parent if cj else None)
-        return self._score[1]
+        """Партитура звуков книги (cues_book1.json действующего комплекта) и сведение конвейера (zvuk_k1a.py) — есть ли."""
+        return self.kit_active() if self.zvuk() is not None else None
 
-    def kit_import(self) -> dict:
+    def score_view(self) -> dict:
+        """Партитура для окна: есть ли, сколько её звуков на дорожках, сколько из них правил автор, сколько он убрал,
+        не стоят ли они из прежнего комплекта и не распаковывается ли новый."""
+        kit, base = self.kit_score(), self.kit_dir()
+        ks = [c for c in self.store["cues"] if c.get("src") == "kit"]
+        pre = ""
+        if kit is not None and base is not None:
+            try:
+                pre = "kit:" + kit.resolve().relative_to(base.resolve()).as_posix() + "/"
+            except (ValueError, OSError):
+                pass
+        job = self.kit_job
+        return dict(have=kit is not None, on_lanes=len(ks), kit=kit.name if kit is not None else "",
+                    gen=self.kit_state()["gen"] if kit is not None else 0,
+                    mine=sum(1 for c in ks if c.get("mine")), off=len(self.store["kit_off"]),
+                    legacy=sum(1 for c in ks if not c.get("kid")),
+                    stale=sum(1 for c in ks if pre and str(c.get("file") or "").startswith("kit:")
+                              and not str(c["file"]).startswith(pre)),
+                    busy=dict(name=job["name"], pct=job["pct"]) if job and not job.get("error") else None,
+                    error=(job or {}).get("error") or "",
+                    wait=(self.kit_state()["zip"] or {}).get("name", "") if self.zvuk() is not None else "")
+
+    def kit_unpack_start(self) -> dict:
+        """Кнопка «Распаковать»: новый архив комплекта появился в Загрузках, пока студия работала."""
+        if self._kit_lock.locked() or (self.kit_job is not None and not self.kit_job.get("error")):
+            return dict(started=False, busy=True)
+        self.kit_job = None
+        zp = self.kit_state(True)["zip"]
+        if zp is None:
+            raise Oops("нового звукового комплекта в Загрузках нет")
+        self.kit_job = dict(name=zp["name"], pct=0, error=None)   # сразу: перенос партитуры уже ждёт новый комплект
+        threading.Thread(target=self.kit_prepare, daemon=True).start()
+        return dict(started=True)
+
+    def kit_import(self, reset: bool = False) -> dict:
         """Партитура звуков книги -> заглушки на дорожках, сразу со звуками из комплекта. Берётся ровно то, что сводит
         конвейер (те же отметки, файлы, громкости, затухания): его расчёт дорожек по собранным частям переносится на
         фразы — и дальше звуки живут в студии: их видно, можно двигать, выключать, заменять. Прежний перенос
-        заменяется целиком; звуки, поставленные автором, не трогаются."""
+        обновляется: что автор в нём менял (сдвиг, длина, громкость, свой файл, подпись, выключение) — остаётся его,
+        остальное берётся из партитуры заново; убранные им звуки не возвращаются. reset — забыть эти правки и взять
+        партитуру начисто. Звуки, поставленные автором, не трогаются."""
+        if self.kit_job is not None and not self.kit_job.get("error"):
+            raise Oops(f"новый звуковой комплект ещё распаковывается ({self.kit_job['pct']} %) — повторите через минуту")
         kit = self.kit_score()
         if kit is None:
             raise Oops("партитуры звуков для этой книги нет: нужен звуковой комплект (D:\\nox_audiobook\\zvuk) и "
                        "zvuk_k1a.py в папке книги")
-        import importlib
         import types
-        try:
-            z = importlib.import_module("zvuk_k1a")
-        except Exception as e:
-            raise Oops(f"zvuk_k1a.py не загрузился: {type(e).__name__}: {e}")
+        z = self.zvuk()
         kd = self.kit_dir().resolve()
         cues = json.loads((kit / "cues_book1.json").read_text(encoding="utf-8"))
         try:
@@ -3556,13 +3828,13 @@ class Studio:
                                        for x in str(c.get("target", "")).split("+") if x}))
         except Exception as e:
             log(f"фоны местности не собраны: {e}")
+        T = self.kit_tables(kit)
         music_dur = {}
-        try:
-            with open(kit / "music_tracks.csv", encoding="utf-8-sig") as f:
-                for r in csv.DictReader(f, delimiter=";"):
-                    music_dur[r["трек"]] = float(r["длит_с"] or 60)
-        except (OSError, ValueError, KeyError):
-            pass
+        for r in T["mus"].values():
+            try:
+                music_dur[r["трек"]] = float(r["длит_с"] or 60)
+            except (ValueError, KeyError, TypeError):
+                pass
         parts = z.read_parts(n)
         if not parts:
             raise Oops("конвейер ещё не собрал ни одной части (parts\\part_NN.times.tsv) — партитуру не к чему привязать")
@@ -3578,16 +3850,20 @@ class Studio:
                     starts[id2i[rid]] = (off + a0, off + b0)
             off += d
         a = types.SimpleNamespace(voice=1.0, sfx=MIX_DEF["sfx"], amb=MIX_DEF["amb"], music=MIX_DEF["mus"], duck=0.0)
-        items, missed = z.build_timeline(self.rows, starts, cues, kit, music_dur, a)
+        nofile = []
+        try:
+            items, missed = z.build_timeline(self.rows, starts, cues, kit, music_dur, a, nofile)
+        except TypeError:                                      # прежний zvuk_k1a.py в папке книги
+            items, missed = z.build_timeline(self.rows, starts, cues, kit, music_dur, a)
         order = sorted((t0, t1, i) for i, (t0, t1) in starts.items())
         t0s = [x[0] for x in order]
-        import bisect
 
         def anchor(t):
             j = max(0, bisect.bisect_right(t0s, t) - 1)
             s0, s1, i = order[j]
             return (self.uids[i], "s", round(t - s0, 3)) if t <= s1 else (self.uids[i], "e", round(t - s1, 3))
         kind_of = {"sfx": "sfx", "amb": "amb", "music": "mus"}
+        by_id = {str(c.get("id")): c for c in cues}
         new, skipped = [], 0
         t_last = order[-1][1]
         for it in items:
@@ -3601,10 +3877,29 @@ class Studio:
                 continue
             uid, at, o = anchor(max(0.0, float(it["start"])))
             note = str(it.get("note") or "")
-            label = (note.split(" ", 1)[1] if kind == "sfx" and " " in note else note) or Path(rel).stem
-            c = dict(id=self.next_id("c"), kind=kind, label=label[:80], uid=uid, at=at, off=o, file="kit:" + rel,
+            kid = str(it.get("cid") or "")
+            sc = by_id.get(re.sub(r"(:\d+|r)$", "", kid)) or {}
+            if kind == "sfx":                                  # подпись — по-русски, из таблиц комплекта
+                game = note.split(" ", 1)[1] if " " in note else note
+                label = (T["sfx"].get(game) or {}).get("что_это") or game
+            elif kind == "amb":
+                game = note
+                label = (T["amb"].get(note.lower()) or {}).get("что_это") or note
+            else:
+                game = note.replace(" (тема части)", "")
+                ru = (T["mus"].get(game.lower()) or {}).get("что_это")
+                label = (f"{game} — {ru}" if ru else game) + (" (тема части)" if note.endswith("(тема части)") else "")
+            label = label or Path(rel).stem
+            why = "Из партитуры книги" + (f", отметка {sc['id']}" if sc.get("id") else "") \
+                + (f" ({sc['basis']})" if sc.get("basis") else "") \
+                + (": " + str(sc["note"]).strip().rstrip(".") + "." if str(sc.get("note") or "").strip() else ".") \
+                + (f" В игре — {game}." if game and game != label else "") \
+                + (f" Когда звучит: {sc['when']}." if sc.get("when") else "")
+            c = dict(kind=kind, label=label[:80], uid=uid, at=at, off=o, file="kit:" + rel,
                      vol=round(float(it.get("gain", MIX_DEF[kind])) / MIX_DEF[kind], 3), on=True, loop=bool(it.get("loop")),
-                     src="kit", why="из партитуры звуков книги" + (f" ({note})" if note and note != label else ""))
+                     src="kit", why=why)
+            if kid:
+                c["kid"] = kid
             if it.get("offset"):
                 c["foff"] = round(float(it["offset"]), 3)
             if it.get("fade_in"):
@@ -3617,11 +3912,49 @@ class Studio:
             new.append(c)
         with self.lock:
             self._cue_undo("партитура книги перенесена на дорожки")
-            old = sum(1 for c in self.store["cues"] if c.get("src") == "kit")
-            self.store["cues"] = [c for c in self.store["cues"] if c.get("src") != "kit"] + new
-            self.save("партитура книги перенесена на дорожки", {"new": len(new), "replaced": old, "skipped": skipped,
-                                                               "missed": len(missed)})
-        return dict(new=len(new), replaced=old, skipped=skipped, missed=len(missed), parts=len(parts))
+            olds = [c for c in self.store["cues"] if c.get("src") == "kit"]
+            old_by = {c["kid"]: c for c in olds if c.get("kid")}
+            off_set = set() if reset else set(self.store["kit_off"])
+            out, kept, gone, fresh_kids = [], 0, 0, set()
+            for c in new:
+                kid = c.get("kid")
+                if kid and kid in off_set:
+                    gone += 1
+                    continue
+                o = old_by.get(kid) if kid else None
+                if o is not None and o.get("mine") and not reset:    # то, что менял автор, остаётся его
+                    for asp in o["mine"]:
+                        for key in KIT_ASPECT.get(asp, ()):
+                            if key in o:
+                                c[key] = o[key]
+                            else:
+                                c.pop(key, None)
+                    c["mine"] = list(o["mine"])
+                    kept += 1
+                c["id"] = o["id"] if o is not None else self.next_id("c")
+                if kid:
+                    fresh_kids.add(kid)
+                out.append(c)
+            if not reset:                                      # правленый звук, которого в новом расчёте нет, — остаётся
+                for o in olds:
+                    if o.get("mine") and o.get("kid") and o["kid"] not in fresh_kids and o["kid"] not in off_set:
+                        out.append(o)
+                        kept += 1
+            if reset:
+                self.store["kit_off"] = []
+            self.store["cues"] = [c for c in self.store["cues"] if c.get("src") != "kit"] + out
+            self.save("партитура книги перенесена на дорожки", {"new": len(out), "replaced": len(olds), "skipped": skipped,
+                                                               "missed": len(missed), "kept": kept, "gone": gone,
+                                                               "nofile": len(nofile), "kit": kit.name})
+        if missed:                                             # фразу-якорь не нашли в тексте книги: текст в этом месте меняли
+            log(f"партитура: {len(missed)} отметок не нашли свою фразу в тексте книги (текст там меняли или главы нет): "
+                + "; ".join(f"{c.get('id')} гл. {c.get('chapter')} «{str(c.get('anchor') or '')[:40]}»" for c in missed[:8])
+                + ("…" if len(missed) > 8 else ""), "warn", "звуки")
+        if nofile:
+            log(f"партитура: в комплекте {kit.name} нет файлов для {len(nofile)} имён: "
+                + ", ".join(f"{w} {x}" for w, x in nofile[:8]) + ("…" if len(nofile) > 8 else ""), "warn", "звуки")
+        return dict(new=len(out), replaced=len(olds), skipped=skipped, missed=len(missed), parts=len(parts), kept=kept,
+                    gone=gone, nofile=len(nofile), kit=kit.name)
 
     def reanchor_cues(self):
         """Заглушки ищут свои фразы после переразбивки книги: та же фраза (по тексту); нет её — «без места»."""
@@ -4097,8 +4430,23 @@ class Studio:
                 add("info", f"звуки: своих файлов {mine}; общего комплекта (D:\\nox_audiobook\\zvuk) нет")
             else:
                 tot = self.sound_list()["total"] - mine
-                add("ok", f"звуки: своих файлов {mine}, в комплекте {tot} ({kit})"
+                ks = self.kit_state()
+                act = ks["kit"]
+                add("ok", f"звуки: своих файлов {mine}, в комплекте {tot} ({act if act is not None else kit})"
+                          + (" — с готовыми петлями фона" if ks["gen"] > 1 else "")
                           + ("; партитура книги есть" if self.kit_score() is not None else ""))
+                sv = self.score_view()
+                if sv["stale"]:
+                    add("info", f"звуков партитуры на дорожках из прежнего комплекта: {sv['stale']} — они звучат как раньше; "
+                                "«Обновить партитуру книги» возьмёт их из нового (ваши правки сохранятся)")
+                for o in ks["others"]:
+                    used = sum(1 for c in self.store["cues"] if str(c.get("file") or "").startswith(
+                        "kit:" + o.resolve().relative_to(kit.resolve()).as_posix() + "/"))
+                    add("info", f"прежний звуковой комплект {o.name}: " + (f"на его файлы ссылаются звуки на дорожках ({used}) — не удаляйте"
+                                                                         if used else "на дорожках больше не используется; папку можно удалить, если не будете "
+                                                                         "возвращаться к старым точкам возврата проекта (в них звуки стоят из него)"))
+                if (self.root / "zvuk_k1a.py").exists() is False:
+                    add("warn", "в папке книги нет zvuk_k1a.py — партитуру книги не перенести; запустите go (он положит файл)")
 
         def places():
             d = self.disk_dir(False)
@@ -4136,6 +4484,10 @@ class Studio:
                     self.save("студия обновлена", {"label": f"{was} → {VERSION}"})
             self.write_fixed()
             self.write_rules_dict()
+            try:
+                self.kit_prepare()
+            except Exception:
+                log("сбой распаковки звукового комплекта:\n" + traceback.format_exc(), "warn", "звуки")
             self.self_check()
             self.housekeeping()
         except Exception:
@@ -5868,7 +6220,7 @@ class H(BaseHTTPRequestHandler):
                 return self._file(wf.with_suffix(".pk"), "application/octet-stream")
             return self._file(wf, "audio/wav")
         if p == "/api/sounds":
-            return self._json(S.sound_list(q.get("q", "")))
+            return self._json(S.sound_list(q.get("q", ""), q.get("kind", "")))
         if p == "/audio/cue":
             return self._file(S.cue_clip(int(q.get("n", 1)), re.sub(r"[^c0-9]", "", q.get("id", ""))), "audio/wav")
         if p == "/audio/sound":
@@ -6024,8 +6376,10 @@ class H(BaseHTTPRequestHandler):
         elif p == "/api/cues_scan":
             res = S.cues_scan(k, d.get("kinds"), bool(d.get("fresh")))
             return self._json(dict(res, part=S.part_view(k)))
+        elif p == "/api/kit_unpack":
+            return self._json(S.kit_unpack_start())
         elif p == "/api/cues_kit":
-            res = S.kit_import()
+            res = S.kit_import(bool(d.get("reset")))
             return self._json(dict(res, part=S.part_view(k) if k else None))
         elif p == "/api/cues_clear":
             cnt = S.cues_clear(k, d.get("what") or "empty")

@@ -1,5 +1,5 @@
 ﻿# sborshchik_k1a.ps1 — СБОРЩИК-ПРОВЕРКА: что с книгой сейчас, что сломано, что починится само и что делать по порядку.
-# NOX_SBOR 2026-11-11h
+# NOX_SBOR 2026-11-11i
 #
 # ТОЛЬКО ЧТЕНИЕ. Без ключа -Fix скрипт ничего не меняет, не удаляет и не останавливает ни в D:\kniga1a, ни в
 # D:\nox_audiobook, ни в Загрузках. Он смотрит:
@@ -43,7 +43,7 @@ if ($IsWin) { chcp 65001 | Out-Null }
 if (-not $Downloads) { $Downloads = Join-Path $env:USERPROFILE "Downloads" }
 if (-not $Yandex) { $Yandex = Join-Path $env:USERPROFILE "YandexDisk" }
 
-$KIT = "2026-11-11g"
+$KIT = "2026-11-11i"
 $KITFILES = @("go_kniga1a.ps1", "prep_kniga1a.ps1", "run_fast.ps1", "cleanup_k1a.ps1", "nox_fast.py", "verify_k1a.py", "nox_part.py",
               "nox_stress.py", "nox_voices.py", "voicecheck_k1a.py", "nastroyki_ozvuchki.py", "razmetka_k1a.py", "zvuk_k1a.py",
               "voices_kniga1a.py", "nox_studio.py", "nox_studio.html", "nox_studio.ps1", "nox_cues.py", "nox_import.py")
@@ -682,7 +682,7 @@ try {
             }
         }
         $zk = @(Get-ChildItem -LiteralPath $Downloads -Filter "Nox_*.zip" -File -ErrorAction SilentlyContinue).Count
-        if ($zk -gt 0 -or (Test-Path -LiteralPath (Join-Path $Src "zvuk"))) { Info "набор звуков и музыки найден — звуковой слой будет доступен в студии" }
+        if ($zk -gt 0 -or (Test-Path -LiteralPath (Join-Path $Src "zvuk"))) { Info "набор звуков и музыки найден — звуковой слой будет доступен в студии (новый архив звукового комплекта студия распакует сама при запуске; прежний комплект останется на месте)" }
     }
 } catch { Oops "Загрузки" $_ }
 

@@ -1,5 +1,5 @@
 ﻿# nox_studio.ps1 — установка/обновление и запуск «Нокс Студии» (ручная правка аудиокниги поверх черновой озвучки).
-# NOX_STUDIO 2026-11-11g
+# NOX_STUDIO 2026-11-11i
 #
 # Что делает:
 #   1) кладёт nox_studio.py, nox_studio.html, nox_cues.py (распознаватель мест для звуков) и nox_import.py (загрузка
@@ -22,7 +22,7 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
 $dl  = "$env:USERPROFILE\Downloads"
 $Src = "D:\nox_audiobook"
 $App = "$Src\studio"
-$KIT = "NOX_STUDIO 2026-11-11g"
+$KIT = "NOX_STUDIO 2026-11-11i"
 
 # Браузер сохраняет повторные загрузки как "имя (1).ext" — самый свежий файл получает каноническое имя.
 function Use-Newest($pattern) {
@@ -93,10 +93,11 @@ if ($NewBook -or $Import) {
 # Прежние воркеры, если они сейчас работают, от замены файла не страдают — они его уже загрузили.
 Use-Newest "nox_fast*.py"
 # Инструменты книги, которыми пользуется студия: банк голосов и подбор (кнопка «Голоса»), самопроверка ударений,
-# сборка по частям. Обычно их кладёт go; здесь — на случай, если студию обновили отдельно от go.
-foreach ($f in @("nox_voices.py", "nox_stress.py", "nox_part.py")) {
+# сборка по частям, сведение звука (zvuk_k1a.py: выбор звукового комплекта и партитура книги для дорожек).
+# Обычно их кладёт go; здесь — на случай, если студию обновили отдельно от go.
+foreach ($f in @("nox_voices.py", "nox_stress.py", "nox_part.py", "zvuk_k1a.py")) {
     Use-Newest ($f -replace '\.py$', '*.py')
-    if ((Test-Path "$dl\$f") -and (Select-String -Path "$dl\$f" -SimpleMatch "NOX_KIT 2026-11-11g" -Quiet) -and (Test-Path "$Root\nox_audiobook.py")) {
+    if ((Test-Path "$dl\$f") -and (Select-String -Path "$dl\$f" -SimpleMatch "NOX_KIT 2026-11-11i" -Quiet) -and (Test-Path "$Root\nox_audiobook.py")) {
         Copy-Item "$dl\$f" "$Root\$f" -Force
     }
 }
