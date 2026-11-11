@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Нокс Студия</title>
-<!-- NOX_STUDIO 2026-11-11i · интерфейс «Нокс Студии»; сервер — nox_studio.py. Без внешних библиотек: работает без сети. -->
+<!-- NOX_STUDIO 2026-11-12a · интерфейс «Нокс Студии»; сервер — nox_studio.py. Без внешних библиотек: работает без сети. -->
 <style>
 :root{
   --paper:#E8ECEA; --sheet:#FBFCFA; --ink:#17202A; --ink2:#5B6875; --rule:#CBD3CF; --tape:#DCE2DF;
@@ -84,6 +84,20 @@ button.ghost{border-color:transparent;padding:5px 7px}
 .dlg .snd span i{display:block;font-style:normal;font-size:11.5px;color:var(--ink2);overflow-wrap:anywhere}
 .dlg .snd button svg{width:12px;height:12px;display:block}
 #mini{display:block;width:100%;height:16px;cursor:pointer;border-top:1px solid var(--rule)}
+#hsb{display:flex;align-items:stretch;height:15px;border-top:1px solid var(--rule);background:var(--tape);user-select:none}
+#hsb button{flex:none;width:22px;padding:0;border:0;border-radius:0;background:transparent;color:var(--ink2);font:13px/13px var(--ui);cursor:pointer}
+#hsb button:hover{background:var(--hover);color:var(--ink)}
+#hsbTr{position:relative;flex:1 1 auto;cursor:pointer}
+#hsbT{position:absolute;top:3px;height:8px;min-width:30px;border-radius:4px;background:var(--ink2);opacity:.5;cursor:grab}
+#hsbT:hover,#hsb.drag #hsbT{opacity:.85} #hsb.drag #hsbT{cursor:grabbing} #hsb.full #hsbT{opacity:.18;cursor:default}
+#lanePop{position:fixed;z-index:60;width:264px;background:var(--sheet);border:1px solid var(--rule);border-radius:4px;box-shadow:0 8px 28px rgba(0,0,0,.22);padding:10px 12px 12px;font:13.5px/1.35 var(--ui);color:var(--ink)}
+#lanePop[hidden]{display:none}
+#lanePop b{display:block;margin-bottom:6px} #lanePop .r{display:flex;gap:8px;align-items:center;margin:6px 0}
+#lanePop input[type=range]{flex:1 1 auto;min-width:0} #lanePop input[type=number]{width:62px}
+#lanePop small{color:var(--ink2)}
+#insp .envr{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin:4px 0;font-size:13px}
+#insp .envr input{width:58px;padding:2px 4px} #insp .envr button{padding:1px 7px}
+#insp .vers{display:grid;gap:2px;margin:6px 0 10px} #insp .vers label.chk{margin:0}
 
 /* рабочая область */
 main{display:grid;grid-template-columns:minmax(0,1fr) 430px;min-height:0}
@@ -315,6 +329,11 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
 .vz .hist .hr{display:flex;gap:8px;align-items:center;padding:3px 0}
 .tidy ul{margin:4px 0 10px 18px;padding:0;max-height:20vh;overflow:auto}
 #dlg [hidden]{display:none}
+.bk{border-left:3px solid var(--rule);padding:6px 10px;margin:10px 0}
+.bk.run{border-color:var(--sfx)} .bk.err{border-color:#c0392b} .bk.ok{border-color:#2e8b57}
+.dlg label.ck{display:flex;gap:8px;align-items:flex-start;margin:10px 0;font:14.5px/1.4 var(--ui)}
+.dlg label.ck input{margin-top:3px;flex:none}
+#goNext.book{max-width:46ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #dlgQ{margin:6px 0 10px}
 </style>
 </head>
@@ -330,6 +349,7 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
   <nav>
     <button id="btnProj" title="Сохранить работу в файл проекта, вернуться к сохранённому (Ctrl+S — сохранить, Ctrl+O — это окно)">Проект</button>
     <button id="btnParts">Части и главы</button>
+    <button id="btnBook" title="Озвучить всю книгу как есть: часть за частью, без остановок, с паузой; главы собираются сами">Вся книга</button>
     <button id="btnRules">Правила</button>
     <button id="btnVoices" title="Голоса ролей: банк заготовленных голосов, подбор, проба на реплике">Голоса</button>
     <button id="btnKeys">Клавиши</button>
@@ -363,6 +383,7 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
 </section>
 
 <section id="tl"><canvas id="cv"></canvas><canvas id="mini"></canvas>
+  <div id="hsb" title="Прокрутка ленты: тяните ползунок; щелчок по полосе — на экран в сторону; колесо мыши над лентой — тоже прокрутка"><button id="hsbL" type="button" aria-label="Ленту влево">‹</button><div id="hsbTr"><div id="hsbT"></div></div><button id="hsbR" type="button" aria-label="Ленту вправо">›</button></div>
   <div id="laneHint" hidden><span>Дорожки пусты: звуков, фона и музыки в этой части пока нет.</span><button id="lhKit" type="button" title="Отметки звуков, фона и музыки из партитуры книги появятся на дорожках со своими файлами и громкостями">Взять партитуру книги</button><button id="lhScan" type="button" title="Студия найдёт в тексте части места для звуков и поставит подписанные заглушки">Найти места по тексту</button></div></section>
 
 <main>
@@ -394,6 +415,7 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
 </footer>
 
 <div id="banner"></div>
+<div id="lanePop" hidden></div>
 <div id="veil" hidden><div class="dlg" id="dlg" role="dialog" aria-modal="true"></div></div>
 <div id="load">Открываю книгу…</div>
 <div id="loadSub"></div>
@@ -461,7 +483,7 @@ const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).
 // ---------------------------------------------------------------- книга и часть
 async function loadState(){
   const st = await api("/api/state");
-  Object.assign(S, {book:st.book, parts:st.parts, chapters:st.chapters, roles:st.roles, rules:st.rules, engine:st.engine, gotovo:st.gotovo, orphans:st.orphans, cueLabels:st.cue_labels || {}, score:st.score || {}, ver:st.ver, go:st.go || {}});
+  Object.assign(S, {book:st.book, parts:st.parts, chapters:st.chapters, roles:st.roles, rules:st.rules, engine:st.engine, gotovo:st.gotovo, orphans:st.orphans, cueLabels:st.cue_labels || {}, score:st.score || {}, ver:st.ver, go:st.go || {}, auto:st.auto || {}});
   drawGo();
   $("#bookTitle").textContent = st.book.title;
   document.title = "Нокс Студия — " + st.book.title;
@@ -1393,6 +1415,7 @@ function seekTo(t){
   t = Math.max(0, Math.min(t, (S.part ? S.part.total : 0)));
   try { au.currentTime = t; } catch(e){}
   const span = cv.clientWidth / S.zoom;                      // головка ушла за край таймлайна — показать её
+  S.freeUntil = 0;
   if(t < S.scrollT || t > S.scrollT + span * 0.96) S.scrollT = Math.max(0, t - span * 0.25);
   draw(); tick(true);
 }
@@ -1417,7 +1440,7 @@ function tick(force){
     if(e){ e.classList.add("now"); if(!au.paused && performance.now() - S.lastScroll > 3500){ reveal(uid); S.lastScroll = 0; } }
   }
   const W = cv.clientWidth, span = W / S.zoom;
-  if(!au.paused && (t < S.scrollT || t > S.scrollT + span * 0.94)) S.scrollT = Math.max(0, t - span * 0.08);
+  if(!au.paused && performance.now() > (S.freeUntil || 0) && (t < S.scrollT || t > S.scrollT + span * 0.94)) S.scrollT = Math.max(0, t - span * 0.08);
   draw();
 }
 function loop(){ if(!au.paused) tick(); requestAnimationFrame(loop); }
@@ -1476,15 +1499,38 @@ function draw(){
     if(s.mark){ m.fillStyle = red; m.fillRect(s.t0 * k, 0, 2, MH); } }
   m.strokeStyle = ink; m.lineWidth = 1.5; m.strokeRect(t0 * k + .5, .75, Math.min(span, p.total) * k - 1, MH - 1.5);
   m.fillStyle = ink; m.fillRect(t * k - .5, 0, 1.5, MH);
+  // полоса прокрутки: ползунок — видимый кусок ленты
+  const tr = $("#hsbTr"), th = $("#hsbT"), full = span >= p.total - 0.01;
+  if(tr && th){ const TW = tr.clientWidth, w = Math.max(30, Math.min(1, span / Math.max(p.total, 0.01)) * TW), free = Math.max(1, TW - w), maxT = Math.max(0.01, p.total - span * 0.5);
+    th.style.width = (full ? TW : w) + "px"; th.style.left = (full ? 0 : Math.min(free, t0 / maxT * free)) + "px"; $("#hsb").classList.toggle("full", full); }
 }
+// ---- прокрутка ленты: ползунок, стрелки, щелчок по полосе; пока автор крутит сам, головка ленту не отбирает
+function freeScroll(tNew){ if(!S.part) return; S.scrollT = Math.max(0, tNew); S.freeUntil = performance.now() + 5000; draw(); }
+(function(){
+  const bar = $("#hsb"), tr = $("#hsbTr"), th = $("#hsbT"); let d = null;
+  const span = () => cv.clientWidth / S.zoom, maxT = () => Math.max(0.01, S.part.total - span() * 0.5);
+  th.addEventListener("mousedown", e => { if(e.button !== 0 || !S.part || bar.classList.contains("full")) return; e.preventDefault(); e.stopPropagation(); d = {x:e.clientX, t:S.scrollT}; bar.classList.add("drag"); });
+  window.addEventListener("mousemove", e => { if(!d) return; const free = Math.max(1, tr.clientWidth - th.offsetWidth); freeScroll(Math.min(maxT(), d.t + (e.clientX - d.x) / free * maxT())); });
+  window.addEventListener("mouseup", () => { if(d){ d = null; bar.classList.remove("drag"); } });
+  tr.addEventListener("mousedown", e => { if(e.target !== tr || e.button !== 0 || !S.part) return; const r = th.getBoundingClientRect(); freeScroll(Math.min(maxT(), S.scrollT + (e.clientX < r.left ? -1 : 1) * span() * 0.9)); });
+  $("#hsbL").onclick = () => { if(S.part) freeScroll(S.scrollT - span() * 0.25); };
+  $("#hsbR").onclick = () => { if(S.part) freeScroll(Math.min(maxT(), S.scrollT + span() * 0.25)); };
+  bar.addEventListener("wheel", e => { if(!S.part) return; e.preventDefault(); freeScroll(Math.min(maxT(), S.scrollT + (e.deltaY + e.deltaX) / S.zoom)); }, {passive:false});
+  // рамку на обзоре части тоже можно тащить: лента едет, головка остаётся на месте
+  let md = null;
+  mini.addEventListener("mousedown", e => { if(e.button !== 0 || !S.part) return; const r = mini.getBoundingClientRect(), k = r.width / S.part.total, x = e.clientX - r.left;
+    if(x >= S.scrollT * k - 2 && x <= (S.scrollT + Math.min(span(), S.part.total)) * k + 2){ md = {x:e.clientX, t:S.scrollT, k, moved:false}; e.preventDefault(); } });
+  window.addEventListener("mousemove", e => { if(!md) return; if(Math.abs(e.clientX - md.x) > 3) md.moved = true; if(md.moved) freeScroll(Math.min(maxT(), md.t + (e.clientX - md.x) / md.k)); });
+  window.addEventListener("mouseup", () => { if(md){ S.miniDrag = md.moved ? performance.now() : 0; md = null; } });
+})();
 cv.addEventListener("dblclick", e => { const r = cv.getBoundingClientRect(), h = cueAt(e.clientX - r.left, e.clientY - r.top); if(h){ playCue(h.c); return; } const k = segAt(S.scrollT + (e.clientX - r.left) / S.zoom); if(k >= 0) playPhrase(S.part.segs[k].uid); });
 cv.addEventListener("wheel", e => {
   e.preventDefault();
   if(e.ctrlKey){ const r = cv.getBoundingClientRect(), x = e.clientX - r.left, t = S.scrollT + x / S.zoom; setZoom(S.zoom * (e.deltaY < 0 ? 1.25 : 0.8)); S.scrollT = Math.max(0, t - x / S.zoom); }
-  else S.scrollT = Math.max(0, S.scrollT + (e.deltaY + e.deltaX) / S.zoom);
+  else { S.scrollT = Math.max(0, S.scrollT + (e.deltaY + e.deltaX) / S.zoom); S.freeUntil = performance.now() + 5000; }
   draw();
 }, {passive:false});
-mini.addEventListener("click", e => { const r = mini.getBoundingClientRect(), t = (e.clientX - r.left) / r.width * S.part.total; S.scrollT = Math.max(0, t - cv.clientWidth / S.zoom / 2); seekTo(t); });
+mini.addEventListener("click", e => { if(performance.now() - (S.miniDrag || 0) < 400) return; const r = mini.getBoundingClientRect(), t = (e.clientX - r.left) / r.width * S.part.total; S.scrollT = Math.max(0, t - cv.clientWidth / S.zoom / 2); seekTo(t); });
 function setZoom(z){ S.zoom = Math.max(4, Math.min(z, 400)); try { localStorage.setItem("nox.zoom", String(S.zoom)); } catch(e){} drawTop(); }
 window.addEventListener("resize", draw);
 
@@ -1573,16 +1619,32 @@ function drawLanes(g, W, t0, ink, ink2){
       g.fillStyle = hexA(col, 0.13); g.fillRect(x0, y, w, h);
       g.setLineDash([4, 3]); g.strokeStyle = col; g.lineWidth = 1; g.strokeRect(x0 + .5, y + .5, w - 1, h - 1); g.setLineDash([]);
     }
-    if(w > 30){ g.save(); g.beginPath(); g.rect(x0, y, w - 3, h); g.clip(); g.fillStyle = c.cv ? css("--sheet") : col; g.font = (h < 14 ? "9.5px " : "11.5px ") + css("--ui"); g.fillText(c.label, x0 + 5, y + h / 2 + .5); g.restore(); }
+    if(w > 30){ g.save(); g.beginPath(); g.rect(x0, y, w - 3, h); g.clip(); g.fillStyle = c.cv ? css("--sheet") : col; g.font = (h < 14 ? "9.5px " : "11.5px ") + css("--ui"); g.fillText(c.label + (Math.abs(c.vol - 1) > 0.005 ? "  · " + Math.round(c.vol * 100) + " %" : ""), x0 + 5, y + h / 2 + .5); g.restore(); }
+    // участки своей громкости внутри звука: тёмная полоса — тише, светлая — громче; на широких — плашка с процентом
+    if(c.env && c.env.length && c.cv){
+      g.save(); g.beginPath(); g.rect(x0, y, w, h); g.clip(); g.font = "9.5px " + css("--ui");
+      for(const [ra, rb, rg] of c.env){
+        const ex0 = (c.t0 - (c.lead || 0) + ra - t0) * S.zoom, ex1 = (c.t0 - (c.lead || 0) + rb - t0) * S.zoom, ew = Math.max(ex1 - ex0, 2);
+        if(ex1 < x0 || ex0 > x0 + w) continue;
+        g.fillStyle = rg < 1 ? "rgba(0,0,0," + (0.22 + 0.4 * (1 - rg)).toFixed(2) + ")" : "rgba(255,255,255," + Math.min(0.62, 0.24 + 0.25 * (rg - 1)).toFixed(2) + ")"; g.fillRect(ex0, y, ew, h);
+        g.fillStyle = css("--sheet"); g.fillRect(ex0, y, 1.5, h); g.fillRect(ex0 + ew - 1.5, y, 1.5, h);
+        if(ew > 40 && h >= 11){ const txt = Math.round(rg * 100) + " %", tw2 = g.measureText(txt).width + 8, px = Math.min(ex0 + ew - tw2 - 3, Math.max(ex0 + 3, x0 + w - tw2 - 3));
+          g.fillStyle = "rgba(0,0,0,.72)"; g.fillRect(px, y + 2, tw2, h - 4); g.fillStyle = "#fff"; g.fillText(txt, px + 4, y + h / 2 + .5); }
+      }
+      g.restore();
+    }
     if(c.cont){ g.fillStyle = col; g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 - 5, y + h / 2); g.lineTo(x0, y + h); g.fill(); }
     if(c.id === S.cue){ g.globalAlpha = 1; g.strokeStyle = ink; g.lineWidth = 2; g.strokeRect(x0 + 1, y + 1, w - 2, h - 2); }
     g.globalAlpha = 1;
   }
   g.font = "10.5px " + css("--ui");
-  for(const kd of CUE_KINDS){                                  // подписи дорожек — слева, поверх
-    const y = laneY(kd), tw = g.measureText(LANE_NAME[kd]).width + 10;
-    g.fillStyle = hexA(css("--tape").length === 7 ? css("--tape") : "#DCE2DF", 0.86); g.fillRect(0, y + 3, tw, G.LH - 6);
-    g.fillStyle = p.mix.on[kd] ? ink2 : hexA(ink2.length === 7 ? ink2 : "#5B6875", 0.5); g.fillText(LANE_NAME[kd] + (p.mix.on[kd] ? "" : " — выкл"), 5, y + G.LH / 2 + .5);
+  S.laneLW = {};
+  for(const kd of CUE_KINDS){                                  // подписи дорожек — слева, поверх: название и громкость; щелчок — окошко громкости
+    const txt = LANE_NAME[kd] + (p.mix.on[kd] ? " " + Math.round(p.mix[kd] * 100) + " %" : " — выкл") + " ▾";
+    const y = laneY(kd), tw = g.measureText(txt).width + 10;
+    S.laneLW[kd] = tw;
+    g.fillStyle = hexA(css("--tape").length === 7 ? css("--tape") : "#DCE2DF", 0.92); g.fillRect(0, y + 3, tw, G.LH - 6);
+    g.fillStyle = p.mix.on[kd] ? ink2 : hexA(ink2.length === 7 ? ink2 : "#5B6875", 0.5); g.fillText(txt, 5, y + G.LH / 2 + .5);
   }
   if(S.dropAt){ g.strokeStyle = css("--blue"); g.lineWidth = 2; g.setLineDash([5, 4]); g.strokeRect(1, G.LT + 1, W - 2, cv.clientHeight - G.LT - 4); g.setLineDash([]);
     g.fillStyle = css("--blue"); g.fillRect(Math.round(S.dropAt.x) - 1, G.LT, 2, cv.clientHeight - G.LT - 2); }
@@ -1693,6 +1755,10 @@ function cueHTML(c){
   h += '<div class="tools"><button id="cPick">Выбрать звук</button><button id="cOpen">Открыть файл с ПК…</button>' + (c.file ? '<button id="cNoFile" class="ghost">Убрать файл</button>' : "") + '</div>';
   h += '<label class="chk"><input type="checkbox" id="cAll"' + (same ? " checked" : "") + '> тот же файл — всем «' + esc(c.label) + '» без своего' + (same ? " (ещё " + same + " в этой части)" : "") + '</label>';
   h += '<label class="f" for="cVol">Громкость <span id="cVolV" class="num">' + Math.round(c.vol * 100) + ' %</span></label><input id="cVol" type="range" min="0" max="2" step="0.05" value="' + c.vol + '">';
+  h += '<label class="f">Громкость участка <span style="font-weight:400;color:var(--ink2)">— тише или громче только в части звука</span></label><div class="envs">';
+  (c.env || []).forEach((r, i) => { h += '<div class="envr" data-ei="' + i + '">от <input type="number" class="eA" min="0" step="0.5" value="' + r[0] + '" aria-label="Начало участка, секунд от начала звука"> до <input type="number" class="eB" min="0" step="0.5" value="' + r[1] + '" aria-label="Конец участка, секунд от начала звука"> с —'
+      + ' <input type="number" class="eG" min="0" max="400" step="5" value="' + Math.round(r[2] * 100) + '" aria-label="Громкость участка, процентов"> % <button class="eHear" title="Послушать этот участок вместе с голосом">▶</button><button class="ghost eDel" title="Убрать участок">✕</button></div>'; });
+  h += '</div><div class="tools"><button id="cEnvAdd" title="Новый участок: от места, где стоит головка (если она на этом звуке), 10 секунд, вдвое тише. Потом числа можно поправить. Секунды считаются от начала звука.">+ участок от головки</button></div>';
   h += '<div class="row2"><div><label class="f" for="cLen">Длина, с</label><input id="cLen" type="number" min="0.1" step="0.1" value="' + len.toFixed(1) + '"></div>'
      + '<div><label class="f" for="cT0">Начало, с</label><input id="cT0" type="number" min="0" step="0.1" value="' + c.t0.toFixed(1) + '"></div></div>';
   if(c.kind === "sfx" && c.cv && c.len !== null) h += '<div class="tools"><button id="cNat" class="ghost">Длина как в файле</button></div>';
@@ -1715,6 +1781,19 @@ function bindCue(c){
   on("#cVol", "input", e => { $("#cVolV").textContent = Math.round(e.target.value * 100) + " %"; c.vol = +e.target.value; syncCues(); });
   on("#cVol", "change", e => cueSet(c.id, {set:{vol:+e.target.value}}));
   on("#cLen", "change", e => { const v = Math.max(0.1, +e.target.value || 0.1); cueSet(c.id, c.kind === "sfx" && !c.bed ? {set:{len:v}} : {te:c.t0 + v}); });
+  // участки своей громкости: секунды — от начала звука (у звука, идущего с прошлой части, — с учётом уже отыгранного)
+  const envRows = () => [...document.querySelectorAll("#insp .envr")].map(r => [Math.max(0, +r.querySelector(".eA").value || 0), Math.max(0, +r.querySelector(".eB").value || 0), Math.max(0, (+r.querySelector(".eG").value || 0) / 100)]).filter(x => x[1] - x[0] >= 0.1);
+  for(const r of document.querySelectorAll("#insp .envr")){
+    for(const i of r.querySelectorAll("input")) i.addEventListener("change", () => cueSet(c.id, {set:{env:envRows()}}));
+    r.querySelector(".eDel").addEventListener("click", () => { r.remove(); cueSet(c.id, {set:{env:envRows()}}); });
+    r.querySelector(".eHear").addEventListener("click", () => { const k = +r.dataset.ei, e0 = (c.env || [])[k]; if(e0){ const a = c.t0 - (c.lead || 0) + e0[0]; playFrom(Math.max(0, a - 2), Math.min(S.part.total, c.t0 - (c.lead || 0) + e0[1] + 2)); } });
+  }
+  on("#cEnvAdd", "click", () => {
+    const now = au.currentTime || 0, inside = now >= c.t0 && now < c.t1 - 0.3, a = Math.round(((inside ? now - c.t0 : 0) + (c.lead || 0)) * 10) / 10;
+    const b = Math.round(Math.min(a + 10, (c.lead || 0) + (c.t1 - c.t0)) * 10) / 10;
+    if(b - a < 0.1){ toast("Звук слишком короткий для участка.", "red"); return; }
+    cueSet(c.id, {set:{env:[...(c.env || []), [a, b, 0.5]]}}).then(() => toast("Участок добавлен: от " + a + " до " + b + " с, 50 %. На полоске он тёмный; числа можно поправить.", "ok", 7000));
+  });
   on("#cT0", "change", e => cueSet(c.id, {t:Math.max(0, +e.target.value || 0)}));
   on("#cNat", "click", () => cueSet(c.id, {set:{len:null}}));
   on("#cLoop", "change", e => cueSet(c.id, {set:{loop:e.target.checked}}));
@@ -1736,6 +1815,10 @@ function soundsHTML(p){
   h += '<div class="sum"><b class="num">' + withF + '</b><span>со звуком</span><b class="num">' + empty + '</b><span>заглушек без файла</span></div>';
   h += '<div class="lanes">' + CUE_KINDS.map(k => '<label class="chk"><input type="checkbox" data-lane="' + k + '"' + (p.mix.on[k] ? " checked" : "") + '> ' + LANE_NAME[k] + '</label>'
       + '<input type="range" data-lanev="' + k + '" min="0" max="1" step="0.01" value="' + p.mix[k] + '" aria-label="Громкость дорожки ' + LANE_NAME[k] + '"><span class="num" data-lanet="' + k + '">' + Math.round(p.mix[k] * 100) + ' %</span>').join("") + '</div>';
+  const envC = cs.filter(c => (c.env || []).length);
+  if(envC.length) h += '<p class="note" style="margin:0 0 8px">Звуков с участками своей громкости: ' + envC.length + '. <button id="envFirst" class="ghost">Показать</button></p>';
+  h += '<h3 class="sub">Версии готовых файлов</h3><div class="vers"><label class="chk"><input type="checkbox" checked disabled> только голос</label>'
+      + MIX_VARS.map(v => '<label class="chk"><input type="checkbox" data-var="' + v[0] + '"' + ((p.mix.vars || {})[v[0]] !== false ? " checked" : "") + '> ' + v[1] + '</label>').join("") + '</div>';
   h += '<div class="acts"><button id="cuScan">Найти места по тексту</button><button id="cuAddS">+ звук</button><button id="cuAddA">+ фон</button><button id="cuAddM">+ музыка</button></div>';
   if(S.score && S.score.have) h += '<div class="acts"><button id="cuKit">' + (S.score.on_lanes ? "Обновить партитуру книги" : "Взять партитуру книги") + '</button></div>';
   if(S.score && S.score.busy) h += '<p class="note">Распаковывается новый звуковой комплект из Загрузок: ' + S.score.busy.pct + ' %. Прежний остаётся на месте.</p>';
@@ -1744,8 +1827,11 @@ function soundsHTML(p){
   else if(S.score && S.score.stale) h += '<p class="note">Звуков партитуры из прежнего комплекта на дорожках: ' + S.score.stale + '. Они звучат как раньше; «Обновить партитуру книги» возьмёт их из нового комплекта — ваши правки сохранятся.</p>';
   if(autoEmpty) h += '<div class="acts"><button id="cuClear" class="ghost">Убрать пустые заглушки: ' + autoEmpty + '</button></div>';
   h += '<p class="note">Заглушка — подписанное место на ленте («скрип двери», «напряжённая музыка») пока без звука. Щёлкните полоску и выберите файл либо перетащите wav или mp3 из папки прямо на ленту. Проценты — громкость дорожки относительно голоса.</p>';
-  const mx = p.export && p.export.mix;
-  if(mx && mx.file) h += '<p class="note">Готовая часть со звуком: ' + esc(mx.file) + (mx.fresh ? "" : " — устарела.") + (mx.fresh ? "" : ' <button id="reExport" class="ghost">Собрать заново</button>') + '</p>';
+  const mx = p.export && p.export.mix, ev = (p.export && p.export.vars) || [];
+  if(ev.length){ const have = ev.filter(v => v.exists), bad = ev.filter(v => v.on && (!v.exists || !v.fresh));
+    h += '<p class="note">Готовые файлы части со звуком — версий: ' + have.length + (have.length ? ' (' + have.map(v => v.name.split(":")[0]).join("; ") + ')' : '') + '. Папки рядом с голосовой: gotovo\\chasti_…'
+      + (bad.length ? ' Устарели или не собраны: ' + bad.length + '. <button id="reExport" class="ghost">Собрать заново</button>' : '') + '</p>'; }
+  else if(mx && mx.file) h += '<p class="note">Готовая часть со звуком: ' + esc(mx.file) + (mx.fresh ? "" : " — устарела.") + (mx.fresh ? "" : ' <button id="reExport" class="ghost">Собрать заново</button>') + '</p>';
   else if(p.export && p.msig) h += '<p class="note">Звуки изменены после сборки готовой части. <button id="reExport" class="ghost">Собрать файл со звуком</button></p>';
   return h;
 }
@@ -1759,6 +1845,7 @@ function bindSounds(p){
   on("#cuClear", "click", async () => { try { const r = await api("/api/cues_clear", {part:S.n, what:"empty"}); setPart(r.part); toast("Убрано заглушек: " + r.count + " (Ctrl+Z — вернуть)"); } catch(e){ fail(e); } });
   on("#reExport", "click", () => exportPart(S.n));
   on("#cuKit", "click", cueKitDialog);
+  on("#envFirst", "click", () => { const c = (p.cues || []).find(x => (x.env || []).length); if(!c) return; S.cue = c.id; S.sel = null; S.ed = null; S.scrollT = Math.max(0, c.t0 - 3); S.freeUntil = performance.now() + 5000; markSel(); drawInsp(); draw(); });
   on("#kitUnpack", "click", async () => { try { await api("/api/kit_unpack", {}); toast("Распаковываю звуковой комплект — это минута; прежний остаётся на месте.", "ok", 8000); await loadState(); drawInsp(); } catch(e){ fail(e); } });
 }
 async function cueKitDialog(){
@@ -1790,7 +1877,9 @@ async function cueKitDialog(){
         $("#load").hidden = true;
       }, "pri"]]);
 }
+const MIX_VARS = [["sfx", "с эффектами"], ["sfx_amb", "с эффектами и окружением"], ["sfx_mus", "с эффектами и музыкой"], ["all", "всё вместе: эффекты, окружение, музыка"]];
 function bindLanes(p){
+  for(const e of document.querySelectorAll("#insp [data-var]")) e.addEventListener("change", async () => { try { const r = await api("/api/mix", {part:S.n, vars:{[e.dataset.var]:e.checked}}); setPart(r.part); toast(e.checked ? "Версия будет собираться вместе с готовыми файлами." : "Эта версия больше не собирается; её прежние файлы уберутся при следующей сборке части.", "", 6000); } catch(err){ fail(err); } });
   for(const e of document.querySelectorAll("[data-lane]")) e.addEventListener("change", async () => { try { const r = await api("/api/mix", {part:S.n, on:{[e.dataset.lane]:e.checked}}); S.showCues = true; setPart(r.part); applyCues(true); } catch(err){ fail(err); } });
   for(const e of document.querySelectorAll("[data-lanev]")){
     e.addEventListener("input", () => { document.querySelector('[data-lanet="' + e.dataset.lanev + '"]').textContent = Math.round(e.value * 100) + " %"; S.part.mix[e.dataset.lanev] = +e.value; syncCues(); });
@@ -1799,9 +1888,34 @@ function bindLanes(p){
 }
 // ---- мышь на ленте: звук можно выбрать, утащить, растянуть; файл из папки — бросить на ленту
 let press = null;
+// подпись дорожки слева («музыка 10 % ▾»): какая дорожка под мышью
+function laneLabelAt(x, y){
+  const G = geom(); if(!G.lanes || !S.part || !S.laneLW) return null;
+  for(const kd of CUE_KINDS){ const ly = laneY(kd); if(y >= ly + 2 && y <= ly + G.LH - 2 && x <= (S.laneLW[kd] || 0)) return kd; }
+  return null;
+}
+// окошко громкости дорожки: включена ли, ползунок и число; слышно сразу, записывается при отпускании
+function lanePop(kd, cx, cy){
+  const el = $("#lanePop"), p = S.part; if(!p) return;
+  el.innerHTML = '<b>Дорожка «' + LANE_NAME[kd] + '»</b><label class="r"><input type="checkbox" id="lpOn"' + (p.mix.on[kd] ? " checked" : "") + '> звучит</label>'
+    + '<div class="r"><input type="range" id="lpV" min="0" max="1" step="0.01" value="' + p.mix[kd] + '" aria-label="Громкость дорожки"><input type="number" id="lpN" min="0" max="200" step="1" value="' + Math.round(p.mix[kd] * 100) + '" aria-label="Громкость, процентов"> %</div>'
+    + '<small>Громкость всей дорожки относительно голоса — для этой книги целиком. Отдельный звук или его участок — в свойствах звука (щёлкните полоску).</small>';
+  el.hidden = false;
+  el.style.left = Math.max(6, Math.min(cx, window.innerWidth - 280)) + "px"; el.style.top = Math.max(6, Math.min(cy + 10, window.innerHeight - el.offsetHeight - 8)) + "px";
+  const live = v => { S.part.mix[kd] = v; syncCues(); draw(); };
+  const save = async body => { try { const r = await api("/api/mix", Object.assign({part:S.n}, body)); setPart(r.part); } catch(e){ fail(e); } };
+  $("#lpV").addEventListener("input", e => { $("#lpN").value = Math.round(e.target.value * 100); live(+e.target.value); });
+  $("#lpV").addEventListener("change", e => save({[kd]:+e.target.value}));
+  $("#lpN").addEventListener("change", e => { const v = Math.max(0, Math.min(2, (+e.target.value || 0) / 100)); $("#lpV").value = Math.min(1, v); live(v); save({[kd]:v}); });
+  $("#lpOn").addEventListener("change", e => save({on:{[kd]:e.target.checked}}));
+}
+function lanePopClose(){ const el = $("#lanePop"); if(el && !el.hidden){ el.hidden = true; el.innerHTML = ""; } }
+window.addEventListener("mousedown", e => { const el = $("#lanePop"); if(el && !el.hidden && !el.contains(e.target)) lanePopClose(); }, true);
+window.addEventListener("keydown", e => { if(e.key === "Escape") lanePopClose(); }, true);
 cv.addEventListener("mousedown", e => {
   if(e.button !== 0 || !S.part) return;
-  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, hit = cueAt(x, y);
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, lk = laneLabelAt(x, y), hit = lk ? null : cueAt(x, y);
+  if(lk){ e.preventDefault(); press = null; lanePop(lk, e.clientX, e.clientY); return; }
   press = {x, y, hit};
   if(hit){
     e.preventDefault();
@@ -1811,8 +1925,9 @@ cv.addEventListener("mousedown", e => {
 });
 window.addEventListener("mousemove", e => {
   const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  if(!press || !press.hit){ if(e.target === cv){ const h = cueAt(x, y); cv.style.cursor = h ? (h.edge ? "ew-resize" : "grab") : "pointer";
-      const tip = h ? h.c.label + " — " + LANE_NAME[h.c.kind] + ", " + fmt(h.c.t0, 1) + "–" + fmt(h.c.t1, 1) + (h.c.on ? "" : ", выключен") : ""; if(cv.title !== tip) cv.title = tip; } return; }
+  if(!press || !press.hit){ if(e.target === cv){ const lk = laneLabelAt(x, y), h = lk ? null : cueAt(x, y); cv.style.cursor = h ? (h.edge ? "ew-resize" : "grab") : "pointer";
+      const tip = lk ? "Дорожка «" + LANE_NAME[lk] + "»: щёлкните, чтобы изменить её громкость или выключить"
+        : h ? h.c.label + " — " + LANE_NAME[h.c.kind] + ", " + fmt(h.c.t0, 1) + "–" + fmt(h.c.t1, 1) + ", громкость " + Math.round(h.c.vol * 100) + " %" + ((h.c.env || []).length ? ", участков своей громкости: " + h.c.env.length : "") + (h.c.on ? "" : ", выключен") : ""; if(cv.title !== tip) cv.title = tip; } return; }
   const dx = x - press.x; if(!S.drag && Math.abs(dx) < 4) return;
   const c = press.hit.c, dt = dx / S.zoom, tot = S.part.total;
   if(press.hit.edge) S.drag = {id:c.id, mode:"len", t0:c.t0, t1:Math.max(c.t0 + 0.1, Math.min(c.t1 + dt, tot))};
@@ -1889,7 +2004,7 @@ async function pollJobs(){
     S.jobs = r.jobs; S.engine = r.engine; drawEngine();
     if(!S.jobsSeen){ S.jobsSeen = true; for(const j of r.jobs) if(j.status === "done" || j.status === "error") S.notes[j.rid] = 1; }
     const fin = r.jobs.filter(j => (j.status === "done" || j.status === "error") && !S.notes[j.rid]);
-    for(const j of fin){ S.notes[j.rid] = 1; if(j.status === "error") toast("Фраза не озвучена: " + j.error, "red", 12000); else if(j.why && j.why.length) toast("Дубль готов, но движок сам заметил: " + j.why.join(", "), "red", 9000); }
+    for(const j of fin){ S.notes[j.rid] = 1; if(j.status === "error") toast("Фраза не озвучена: " + j.error, "red", 12000); else if(j.why && j.why.length) toast(j.chosen === false ? "Дубль записан, но не выбран: движок сомневается, что в нём речь (" + j.why.join(", ") + "). Он в списке дублей; в части звучит прежняя запись." : "Дубль готов, но движок сам заметил: " + j.why.join(", "), "red", 11000); }
     const act = j => j.status === "queued" || j.status === "running";
     if(fin.length || S.repoll || before.some(act) !== r.jobs.some(act)){ S.repoll = false; if(S.n && !(S.ed && S.ed.dirty)){ const n0 = S.n, a0 = S.act, p = await api("/api/part?n=" + n0); if(n0 === S.n && a0 === S.act && !S.posts && !(S.ed && S.ed.dirty)) setPart(p); else if(n0 === S.n) S.repoll = true; } else if(S.n) S.repoll = true; }
     else if(S.sel && r.jobs.some(j => j.uid === S.sel && act(j)) && !(S.ed && S.ed.dirty) && !S.free && document.activeElement.tagName !== "SELECT") drawInsp();
@@ -1906,9 +2021,11 @@ function drawBanner(){
 }
 
 // ---------------------------------------------------------------- закрепление части, готовые файлы
+// сколько версий со звуком легло рядом с голосовым файлом (ответ сервера о сборке)
+function verNote(ex){ const n = ex && ex.vars ? Object.keys(ex.vars).length : (ex && ex.mix ? 1 : 0); return n ? ". Версий со звуком рядом: " + n + " (папки chasti_…)" : ""; }
 async function exportPart(){
   $("#load").hidden = false; $("#load").textContent = "Собираю готовую часть " + S.n + "…";
-  try { const r = await api("/api/export", {part:S.n}); setPart(r.part); await loadState(); toast("Готовая часть: " + r.export.file + " (" + fmt(r.export.dur, 0) + ")" + (r.export.mix ? ". Со звуком: " + r.export.mix.file : ""), "ok", 14000, ["Показать в папке", () => openDir("file", r.export.file)]); }
+  try { const r = await api("/api/export", {part:S.n}); setPart(r.part); await loadState(); toast("Готовая часть: " + r.export.file + " (" + fmt(r.export.dur, 0) + ")" + verNote(r.export), "ok", 14000, ["Показать в папке", () => openDir("file", r.export.file)]); }
   catch(e){ fail(e); }
   $("#load").hidden = true;
 }
@@ -1932,13 +2049,13 @@ $("#lockPart").addEventListener("click", async () => {
   if(ud) h += '<p>Сверка ударений: в ' + ud + ' фразах вторая модель читает слово иначе (значок «уд.»). Если вы их уже послушали — закрепляйте.</p>';
   if(p.stress && p.stress.have && (p.stress.busy || p.stress.todo)) h += '<p>Сверка ударений этой части ещё ' + (p.stress.busy ? "идёт" : "не выполнена (сводка части → «Проверить»)") + '.</p>';
   const snd = (p.cues || []).filter(c => c.cv && cueLive(c)).length, mute = (p.cues || []).filter(c => !c.cv).length;
-  if(snd) h += '<p>Звуков, фона и музыки в части: <b>' + snd + '</b> — рядом ляжет второй файл, «со звуком» (папка chasti_so_zvukom).' + (mute ? ' Заглушек без файла: ' + mute + ' — они молчат и в файл не попадут.' : '') + '</p>';
+  if(snd) h += '<p>Звуков, фона и музыки в части: <b>' + snd + '</b> — рядом с голосовым файлом лягут версии со звуком (' + MIX_VARS.filter(v => (p.mix.vars || {})[v[0]] !== false).map(v => v[1].split(":")[0]).join("; ") + ').' + (mute ? ' Заглушек без файла: ' + mute + ' — они молчат и в файл не попадут.' : '') + '</p>';
   if(marks) h += '<p><b>' + marks + '</b> фраз всё ещё помечены при прослушивании.</p>';
   if(flags) h += '<p><b>' + flags + '</b> фраз с замечаниями автоматической проверки вы ещё не отметили как прослушанные.</p>';
   dialog(h, [["Отмена"], ["Закрепить и собрать", async () => {
     $("#load").hidden = false; $("#load").textContent = "Закрепляю и собираю часть " + S.n + "…";
     try { const r = await api("/api/lock", {whole:true, part:S.n}); S.ed = null; setPart(r.part); await loadState();
-          toast("Часть " + S.n + " закреплена. Готовый файл: " + r.export.file + " (" + fmt(r.export.dur, 0) + ")" + (r.export.mix ? ". Со звуком: " + r.export.mix.file : ""), "ok", 16000, ["Показать в папке", () => openDir("file", r.export.file)]); }
+          toast("Часть " + S.n + " закреплена. Готовый файл: " + r.export.file + " (" + fmt(r.export.dur, 0) + ")" + verNote(r.export), "ok", 16000, ["Показать в папке", () => openDir("file", r.export.file)]); }
     catch(e){ fail(e); try { const p2 = await api("/api/part?n=" + S.n); S.ed = null; setPart(p2); await loadState(); } catch(_){} }
     $("#load").hidden = true;
   }, "pri"]]);
@@ -2007,8 +2124,10 @@ async function pollLog(){
     }
     jBadge(); jSys();
     if(r.engine){ S.engine = r.engine; drawEngine(); }
+    const bookOn = r.auto && r.auto.state === "run";
     if(r.go){ const was = S.go && S.go.running; S.go = r.go; drawGo();
-      if(was && !r.go.running){ loadState().then(() => { const d = S.parts.find(x => !x.opened); if(d) toast("Часть " + d.n + " озвучена и собрана.", "ok", 0, ["Открыть её", () => openPart(d.n)]); }).catch(()=>{}); } }
+      if(was && !r.go.running && !bookOn){ loadState().then(() => { const d = S.parts.find(x => !x.opened); if(d) toast("Часть " + d.n + " озвучена и собрана.", "ok", 0, ["Открыть её", () => openPart(d.n)]); }).catch(()=>{}); } }
+    if(r.auto){ const was = S.auto || {}; S.auto = r.auto; drawGo(); bookWatch(was, r.auto); }
     if(J.auto && J.open && S.engine.ready && !J.autoT) J.autoT = setTimeout(() => { J.autoT = 0; if(J.auto && J.open) jOpen(false); J.auto = false; }, 6000);
   } catch(e){}
   const busy = J.sys && J.sys.ops && J.sys.ops.length;
@@ -2067,6 +2186,8 @@ function helpDialog(){
     ["Найти роль, голос, место", "В длинных списках есть поиск: «Найти…» рядом с «Кто говорит» (клавиша F), поле над списком ролей и над банком в окне «Голоса», а когда строк становится много — и в окнах «Части и главы», «Правила», «Проект». Достаточно части имени — «стар», «капит», «гл.7»; несколько слов сужают отбор; буква ё и регистр не важны; запрос, набранный в английской раскладке, читается как русский. Сначала показываются роль по книге, недавно выбранные и говорящие рядом, потом остальные по числу реплик."],
     ["Текст книги с вашими правками — в txt", "Ctrl+E сохраняет текст книги в файл: от начала до выбранной фразы или всю книгу. В текст попадают слова, которые вы изменили во фразах, и вставленные фразы; ударения и правила чтения — нет, знаки и кавычки остаются как в рукописи. Рядом кладётся список изменённых мест («в книге» → «в студии»), чтобы перенести правки в рукопись. Файлы — в папке gotovo\\tekst и на Яндекс Диске."],
     ["Проект: сохранить и вернуться", "Каждая правка пишется на диск сразу, поэтому «сохраняться» не обязательно. Ctrl+S делает точку возврата — снимок всей работы: правок, вставок, обрезок, закреплений, звуков на дорожках. Он мгновенный и маленький, потому что записи со своего диска студия не удаляет никогда. «Сохранить со звуком» в окне «Проект» кладёт в один файл ещё и все дубли, свои записи и звуки — это резервная копия и способ перенести работу на другой компьютер. Окно «Проект» (Ctrl+O) показывает сохранённое; «Загрузить» сначала объясняет, что изменится. Перед загрузкой нынешнее состояние само сохраняется точкой возврата, записи только добавляются — загрузку всегда можно отыграть назад. Точки возврата студия делает и сама: при закреплении части."],
+    ["Вся книга как есть: без остановок, с паузой", "Кнопка «Вся книга» вверху окна. Студия сама ведёт книгу часть за частью: конвейер озвучивает и собирает часть, студия принимает её как есть, закрепляет, собирает готовый файл — и сразу следующую. Главы собираются по дороге, как только закреплена их последняя часть; звуки и музыка партитуры ставятся сами (громкости по умолчанию: музыка 10 %, звуки 16 %, фон 12 %). «Пауза» (справа над лентой) останавливает конвейер, всё озвученное сохраняется; «Продолжить книгу» идёт с того же места, хоть на другой день. Окно студии должно быть открыто. Принятые так части помечены «принята без прослушивания» — любую можно открыть, снять закрепление, поправить и закрепить снова. «Собрать готовые главы» в «Частях и главах» собирает файлы всех глав, которые уже озвучены целиком."],
+    ["Короткая фраза молчит, проба голоса пустая", "На очень коротких фразах («Наконец-то.») движок иногда возвращает тишину. Студия теперь сама пробует ещё несколько раз другим способом, а если речи так и нет — дубль не записывается, и в части остаётся прежняя запись; нажмите «Озвучить заново» ещё раз. Если прежняя версия уже успела выбрать пустой дубль, выбор возвращается к звучащему сам (строка об этом — в журнале). «Проба» в окне «Голоса» читает реплику роли подлиннее, пустой результат не запоминается. «Сбросить голос роли» возвращает роли её первоначальный голос; «Вернуть прежний голос» — тот, что был до последней смены."],
     ["Что-то пошло не так", "Откройте журнал и нажмите «Важное» — останутся замечания и сбои. «Скопировать» кладёт показанные строки в буфер обмена. Правки пишутся на диск сразу: если окно закрылось, запустите студию ярлыком ещё раз — всё на месте."]];
   dialog('<h3>Справка: как сделать</h3>' + H.map((x, i) => '<details' + (i ? "" : " open") + '><summary>' + x[0] + '</summary><p>' + x[1] + '</p></details>').join("")
     + '<p class="note">Версия студии ' + esc(S.ver || "") + '.</p>', [["Клавиши", keysDialog], ["Закрыть"]]);
@@ -2083,13 +2204,14 @@ function closeDialog(){ $("#veil").hidden = true; $("#dlg").classList.remove("wi
 $("#veil").addEventListener("mousedown", e => { if(e.target.id === "veil") closeDialog(); });
 function partStatus(p){
   if(!p.opened) return "черновик конвейера";
-  if(p.locked) return !p.export ? "закреплена, файла нет" : p.export.fresh ? "закреплена, файл собран" : "закреплена, файл устарел";
+  if(p.locked) return (!p.export ? "закреплена, файла нет" : p.export.fresh ? "закреплена, файл собран" : "закреплена, файл устарел") + (p.auto ? " — принята без прослушивания" : "");
   const c = p.cnt || {}; return "в работе" + (c.locked ? ", закреплено фраз " + c.locked : "") + (c.edited ? ", правок " + c.edited : "") + (c.mark ? ", пометок " + c.mark : "");
 }
 function partsDialog(){
   const g = S.go || {};
   let h = '<h3>Части</h3><p class="note goline">' + (g.fixed ? '<span>Закреплено частей: ' + g.fixed + ' — ' + g.pct + ' % книги.</span>' : "")
-      + (g.running ? "Идёт озвучка части " + g.next + " — ход в журнале внизу окна (клавиша J)."
+      + ((S.auto || {}).state === "run" ? "Идёт озвучка всей книги: " + esc((S.auto || {}).step || "") + " — «Вся книга» → «Пауза»."
+      : g.running ? "Идёт озвучка части " + g.next + " — ход в журнале внизу окна (клавиша J)."
       : g.can ? '<span>Все открытые части закреплены.</span><button id="goDlg" class="pri">Озвучить следующую часть — ' + g.next + '</button>' : esc(g.why || "")) + '</p>'
     + '<table><tr><th>Часть</th><th>Начинается с</th><th>Длина</th><th>Состояние</th><th></th></tr>';
   for(const p of S.parts) h += '<tr class="' + (p.n === S.n ? "cur" : "") + '"><td class="num"><b>' + String(p.n).padStart(2,"0") + '</b></td><td>' + esc(p.first) + '</td><td class="num">' + (p.dur ? fmt(p.dur, 0) : "—") + '</td><td>' + esc(partStatus(p)) + '</td><td><button data-open="' + p.n + '">Открыть</button></td></tr>';
@@ -2099,11 +2221,12 @@ function partsDialog(){
     h += '<tr><td>' + esc(c.title) + '</td><td class="num">' + c.locked + ' из ' + c.count + '</td><td>' + (ex ? (ex.fresh === false ? "устарел" : fmt(ex.dur, 0)) : "—") + '</td><td style="white-space:nowrap">'
        + (c.ready ? '<button data-ch="' + c.ch + '">Собрать главу</button> <button data-chl="' + c.ch + '" class="lockb">Закрепить и собрать</button>' : "ещё озвучивается") + '</td></tr>';
   }
-  h += '</table><p class="note">Готовые части: ' + esc(S.gotovo.parts) + '<br>Готовые главы: ' + esc(S.gotovo.chapters) + (S.gotovo.disk ? '<br>Копии на Яндекс Диске: ' + esc(S.gotovo.disk) : "") + '</p>';
+  h += '</table><p class="note" style="margin-top:10px">Версии со звуком лежат в соседних папках: gotovo\\chasti_effekty, chasti_effekty_okruzhenie, chasti_effekty_muzyka, chasti_so_zvukom — и такие же glavy_… Какие версии собирать — галочки в сводке части («Звуки и музыка») и в окне «Вся книга».</p><p class="goline"><button id="chAll" title="Собрать файлы всех глав, которые уже озвучены целиком, а файла у них нет или он устарел">Собрать готовые главы</button><span class="note" style="margin:0">Глава собирается из её частей; звуки и музыка — вторым файлом рядом («со звуком»).</span></p><p class="note">Готовые части: ' + esc(S.gotovo.parts) + '<br>Готовые главы: ' + esc(S.gotovo.chapters) + (S.gotovo.disk ? '<br>Копии на Яндекс Диске: ' + esc(S.gotovo.disk) : "") + '</p>';
   if(S.orphans) h += '<p class="note">Правок, потерявших свою фразу после переразбивки книги: ' + S.orphans + '. Они сохранены в studio\\edits.json (раздел orphans).</p>';
   dialog(h, [["Закрыть"]]);
   dlgSearch("table tr:not(:first-child)", "найти часть или главу: номер, слово из названия, «закреплена»…");
   const gd = $("#goDlg"); if(gd) gd.onclick = () => { closeDialog(); goNext(); };
+  const ca = $("#chAll"); if(ca) ca.onclick = () => { closeDialog(); bookChapters(); };
   for(const b of document.querySelectorAll("[data-open]")) b.onclick = () => { closeDialog(); openPart(+b.dataset.open); };
   const chap = async (c, lock) => { closeDialog(); $("#load").hidden = false; $("#load").textContent = (lock ? "Закрепляю и собираю главу…" : "Собираю главу…");
     try { const r = await api("/api/export", {chapter:c, lock}); Object.assign(S, {parts:r.state.parts, chapters:r.state.chapters}); if(S.n){ const p = await api("/api/part?n=" + S.n); setPart(p); }
@@ -2114,12 +2237,81 @@ function partsDialog(){
 }
 // ---------------------------------------------------------------- следующая часть (go) и голоса
 function drawGo(){
-  const g = S.go || {}, b = $("#goNext"); if(!b) return;
+  const g = S.go || {}, a = S.auto || {}, b = $("#goNext"), st = $("#goStop"); if(!b) return;
+  const bb = $("#btnBook"); if(bb) bb.classList.toggle("pri", a.state === "run");
+  if(a.state === "run" || a.state === "pause" || a.state === "error"){     // книгу ведёт автомат
+    const run = a.state === "run";
+    b.hidden = false; b.disabled = false; b.classList.add("book");
+    b.textContent = run ? "Вся книга: " + (a.step || "идёт") : (a.state === "error" ? "Книга остановлена — что случилось" : "Продолжить книгу (часть " + (a.part || g.next) + ")");
+    b.title = (a.step || "") + (a.err ? " — " + a.err : "") + ". Закреплено " + a.pct + " % книги. Нажмите — откроется окно «Вся книга».";
+    st.hidden = !run; st.textContent = "Пауза"; st.title = "Поставить озвучку книги на паузу. Озвученное и закреплённое сохранится — потом можно продолжить с того же места";
+    return;
+  }
+  b.classList.remove("book");
+  st.textContent = "Стоп"; st.title = "Остановить озвучку части. Озвученное сохранится — потом можно продолжить";
   b.hidden = !(g.can || g.running);
   b.disabled = !!g.running;
   b.textContent = g.running ? "Озвучивается часть " + g.next + "…" : "Озвучить часть " + g.next;
   b.title = g.running ? "Идёт озвучка следующей части — ход в журнале (J)" : "Все открытые части закреплены. Конвейер озвучит, проверит и соберёт следующую часть — только её.";
-  $("#goStop").hidden = !g.running;
+  st.hidden = !g.running;
+}
+// ---------------------------------------------------------------- вся книга как есть: автомат, пауза, главы
+function secsRu(s){ s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? h + " ч " + m + " мин" : m + " мин"; }
+function bookWatch(was, a){
+  if(was.state === a.state && was.locked === a.locked && was.chapters === a.chapters) return;
+  // часть закрепилась или глава собралась — обновить списки; открытую часть перечитать, если автор в ней сейчас ничего не правит
+  loadState().then(async () => { if(S.n && !(S.ed && S.ed.dirty) && !S.posts && was.locked !== a.locked){ try { const p = await api("/api/part?n=" + S.n); if(!(S.ed && S.ed.dirty)) setPart(p); } catch(e){} } }).catch(()=>{});
+  const old = document.getElementById("bookNote"); if(old && was.state !== a.state) old.remove();
+  if(was.state === "run" && a.state === "done"){ const d = toast("Вся книга озвучена, закреплена и собрана по главам.", "ok", 0, ["Папка готовых глав", () => openDir("chapters")]); d.id = "bookNote"; }
+  else if(was.state === "run" && a.state === "error"){ const d = toast("Озвучка книги остановилась на части " + (a.part || "?") + ": " + a.err, "red", 0, ["Вся книга…", bookDialog]); d.id = "bookNote"; }
+}
+async function bookDialog(){
+  try { await loadState(); } catch(e){}
+  const a = S.auto || {}, g = S.go || {};
+  const cur = S.parts.find(p => p.opened && !p.locked), draft = S.parts.find(p => !p.opened);
+  let h = '<h3>Вся книга как есть</h3>'
+    + '<p>Студия сама проведёт книгу до конца, часть за частью: конвейер озвучит, проверит и соберёт часть — студия примет её как есть, закрепит, соберёт готовый файл и сразу возьмётся за следующую. '
+    + 'Главы собираются по дороге: как только закреплена последняя часть главы, файл главы ложится в папку готовых глав. Голоса — те, что сейчас стоят у ролей.</p>';
+  if(a.state === "run") h += '<p class="bk run"><b>Идёт.</b> ' + esc(a.step) + '</p>';
+  else if(a.state === "pause") h += '<p class="bk"><b>Пауза.</b> ' + esc(a.step) + '</p>';
+  else if(a.state === "error") h += '<p class="bk err"><b>Остановлено на части ' + (a.part || "?") + '.</b> ' + esc(a.err) + '</p>';
+  else if(a.done) h += '<p class="bk ok"><b>Книга озвучена и закреплена целиком.</b> Осталось только собрать главы, если каких-то файлов нет.</p>';
+  h += '<p class="note">Закреплено частей: ' + (a.locked || 0) + ' — ' + (a.pct || 0) + ' % книги' + (a.auto_parts ? ' (принято без прослушивания: ' + a.auto_parts + ')' : '')
+    + '. Глав собрано: ' + (a.chapters || 0) + ' из ' + (a.chapters_total || 0) + '.' + (a.secs ? ' В работе: ' + secsRu(a.secs) + '.' : '') + (a.eta ? ' Осталось примерно ' + secsRu(a.eta) + '.' : '') + '</p>';
+  if(a.state !== "run" && !a.done){
+    h += '<p><b>С чего начнётся:</b> ' + (cur ? 'открытая часть ' + cur.n + ' будет принята как есть — изменённые фразы сначала переозвучатся, потом часть закрепится и соберётся её файл'
+        : draft ? 'часть ' + draft.n + ' уже собрана конвейером — она будет принята и закреплена' : 'конвейер возьмётся за часть ' + (g.next || 1)) + '.</p>'
+      + '<label class="ck"><input type="checkbox" id="bkSnd"' + (a.sound !== false && a.kit ? " checked" : "") + (a.kit ? "" : " disabled") + '><span>Ставить звуки, фон и музыку из партитуры книги — тогда рядом с каждой частью и главой лягут версии со звуком'
+      + (a.kit ? '. Громкости дорожек: музыка ' + Math.round(((S.part && S.part.mix) || {mus:0.1}).mus * 100) + ' %, звуки ' + Math.round(((S.part && S.part.mix) || {sfx:0.16}).sfx * 100) + ' %, фон ' + Math.round(((S.part && S.part.mix) || {amb:0.12}).amb * 100) + ' % от голоса (ползунки — в «Звуки и музыка»)' : ' (звукового комплекта у этой книги нет — файлы будут только с голосом)') + '</span></label>';
+  }
+  h += '<p><b>Какие файлы получатся.</b> У каждой части и каждой главы: только голос' + ((a.vars || []).some(v => v.on) && a.kit ? '; ' + (a.vars || []).filter(v => v.on).map(v => esc(v.name.split(":")[0])).join("; ") : '')
+    + '. Каждая версия — в своей папке (gotovo\\chasti, chasti_effekty, chasti_effekty_okruzhenie, chasti_effekty_muzyka, chasti_so_zvukom и такие же glavy_…). Главу студия собирает, только убедившись, что у всех её частей эти файлы лежат на диске.'
+    + (a.disk ? ' Копии — на Яндекс Диске: ' + esc(a.disk) + (a.stamp ? '' : ' (при запуске книги там появится своя папка с датой и временем)') + '.' : '') + '</p>'
+    + (a.state !== "run" && a.kit ? '<div class="vers">' + (a.vars || []).map(v => '<label class="ck" style="margin:2px 0"><input type="checkbox" data-bvar="' + v.id + '"' + (v.on ? " checked" : "") + '><span>версия «' + esc(v.name) + '»</span></label>').join("") + '</div>' : '');
+  h += '<p class="note">Пауза — в любой момент: конвейер остановится, всё озвученное и закреплённое сохранится, «Продолжить» пойдёт с того же места — хоть завтра. Пока идёт озвучка книги, окно студии должно быть открыто '
+    + '(компьютер сам не уснёт); если окно закрыть, озвучка встанет на паузу после текущей части. Голоса ролей и закрепление частей меняются на паузе. Любую принятую часть потом можно открыть, снять закрепление, поправить и закрепить снова — её главу тогда соберите заново.</p>';
+  const btns = [["Закрыть"], ["Собрать готовые главы", bookChapters]];
+  if(a.state === "run") btns.push(["Пауза", bookPause, "pri"]);
+  else if(!a.done) btns.push([a.state === "pause" || a.state === "error" ? "Продолжить" : "Озвучить всю книгу", () => bookStart($("#bkSnd") ? $("#bkSnd").checked : undefined), "pri"]);
+  dialog(h, btns);
+  for(const e of document.querySelectorAll("#dlg [data-bvar]")) e.addEventListener("change", async () => { try { const r = await api("/api/mix", {part:S.n, vars:{[e.dataset.bvar]:e.checked}}); if(r.part) setPart(r.part); } catch(err){ fail(err); e.checked = !e.checked; } });
+}
+async function bookStart(sound){
+  try { commitFree(); if(S.ed && S.ed.dirty) await saveEd();
+        const r = await api("/api/auto", {do:"start", sound}); S.auto = r.auto; S.go = r.go; drawGo(); J.auto = false; jOpen(true); jFilter("all");
+        toast("Озвучка всей книги пошла. Ход — в журнале внизу окна; остановить — «Пауза» справа над лентой.", "ok", 9000); }
+  catch(e){ fail(e); }
+}
+async function bookPause(){
+  try { const r = await api("/api/auto", {do:"pause"}); S.auto = r.auto; S.go = r.go; drawGo(); await loadState();
+        toast("Озвучка книги на паузе. Всё озвученное и закреплённое сохранено; продолжить — кнопка «Продолжить книгу».", "ok", 9000); }
+  catch(e){ fail(e); }
+}
+async function bookChapters(){
+  try { const r = await api("/api/auto", {do:"chapters"}); S.auto = r.auto;
+        if(!r.chapters.count) toast("Собирать нечего: у всех глав, которые уже озвучены целиком, файлы на месте и не устарели.", "ok", 8000);
+        else { J.auto = false; jOpen(true); toast("Собираю главы: " + r.chapters.count + ". Ход — в журнале; файлы лягут в " + S.gotovo.chapters + ".", "ok", 10000); } }
+  catch(e){ fail(e); }
 }
 function goStop(){
   const g = S.go || {};
@@ -2153,13 +2345,15 @@ function voicesDraw(){
     + '<select id="vG"><option value="">любой пол</option><option value="m">мужские</option><option value="f">женские</option><option value="c">детские</option></select>'
     + '<select id="vK"><option value="">заготовки и голоса из книг</option><option value="design">заготовки</option><option value="book">из книг</option><option value="custom">свои</option><option value="have">только с образцом</option></select>'
     + '<input id="vQ" type="search" placeholder="поиск: старик, низкий, рассказчик…" style="flex:1 1 140px">'
-    + (cur.prev ? '<button id="vBack" title="Вернуть образец, который был у роли до последней смены голоса">Вернуть прежний голос</button>' : "") + '</div><div class="col bcol" id="vBank"></div>'
+    + (cur.prev ? '<button id="vBack" title="Вернуть образец, который был у роли до последней смены голоса">Вернуть прежний голос</button>' : "")
+    + (cur.hist ? '<button id="vReset" title="Вернуть роли самый первый её голос — тот, с которым она начинала книгу. Нынешний образец сохранится в «Прежних образцах»">Сбросить голос роли</button>' : "") + '</div><div class="col bcol" id="vBank"></div>'
     + '<details class="vnew"><summary>Свой голос по описанию — если в банке нет подходящего</summary><div class="flt" style="margin-top:6px"><input id="cvName" placeholder="Название: Старый лоцман">'
     + '<select id="cvG"><option value="m">мужской</option><option value="f">женский</option></select>'
     + '<select id="cvAge"><option value="child">ребёнок</option><option value="teen">подросток</option><option value="young">молодой</option><option value="adult" selected>взрослый</option><option value="mature">зрелый</option><option value="old">старый</option></select></div>'
     + '<textarea id="cvDesc" rows="2" placeholder="Описание по-английски, как в таблице настроек: Old sea pilot, 65, hoarse low voice, slow and calm"></textarea>'
     + '<button id="cvMake">Создать голос</button> <span class="note">Нужна видеокарта; голос появится в банке (отбор «свои»).</span></details></div></div>'
-    + '<p class="note">▶ — образец голоса. «Проба» — реплика этой роли новым голосом (в книге ничего не меняется). «Поставить» — дать голос роли: её фразы в незакреплённых частях станут «переозвучить», закреплённые части звучат по-прежнему; прежний образец сохраняется в work\\voices_old. '
+    + '<p class="note">▶ — образец голоса. «Проба» — реплика этой роли новым голосом (в книге ничего не меняется; для пробы берётся реплика подлиннее — на одном слове голос не расслышать). «Поставить» — дать голос роли. '
+    + '<b>Что уже озвучено, не пропадает:</b> закреплённые части звучат по-прежнему и не меняются; в незакреплённых частях прежние записи роли остаются на месте и звучат, пока вы сами их не переозвучите (они помечены «переозвучить»; любую можно оставить как есть). Прежний образец сохраняется в work\\voices_old — «Вернуть прежний голос» и «Сбросить голос роли» возвращают его вместе с записями, сделанными им. '
     + 'Банк голосов: ' + esc(d.dir || "") + (d.busy ? '<br><b>Сейчас идёт: ' + esc(d.busy) + ' — ход в журнале.</b>' : "") + '</p>';
   dialog(h, [["Порядок в голосах…", voiceTidy], ["Дать голоса всем ролям без голоса", () => voiceTool("auto")], ["Создать образцы всех заготовок (≈10 минут)", () => voiceTool("design")], ["Закрыть"]]);
   $("#dlg").classList.add("wide");
@@ -2182,6 +2376,7 @@ function voicesDraw(){
     } catch(e){ box.textContent = e.message || String(e); }
   };
   $("#vFit").onclick = async () => { try { $("#vFit").disabled = true; const r = await api("/api/voice_suggest", {role:V.role}); V.fit = (r.cand || []).map(c => c.id); V.g = V.kind = V.q = ""; voicesDraw(); if(!V.fit.length) toast("Подходящих голосов в банке не нашлось.", "red"); } catch(e){ fail(e); $("#vFit").disabled = false; } };
+  const vr = $("#vReset"); if(vr) vr.onclick = () => voiceReset();
   const vb = $("#vBack"); if(vb) vb.onclick = async () => { try { V.data = await api("/api/voice_revert", {role:V.role}); await loadState(); if(S.n){ const p = await api("/api/part?n=" + S.n); setPart(p); } voicesDraw(); toast("Роли «" + roleName(V.role) + "» возвращён прежний голос. Её фразы в открытой части — «Озвучить изменённые».", "ok", 10000); } catch(e){ fail(e); } };
   $("#cvMake").onclick = async () => {
     const spec = {name:$("#cvName").value.trim(), desc:$("#cvDesc").value.trim(), g:$("#cvG").value, age:$("#cvAge").value};
@@ -2257,17 +2452,29 @@ async function voiceTry(id, btn){
   btn.disabled = true; btn.textContent = "читает…";
   try {
     let r = await api("/api/voice_try", {role:V.role, voice:id, uid:(s && s.role === V.role) ? s.uid : ""});
-    const key = r.key, t0 = Date.now();
+    const key = r.key, t0 = Date.now(), said = r.text || "";
     while(!r.ready){ if(r.error) throw new Error(r.error); if(Date.now() - t0 > 240000) throw new Error("проба не дождалась движка — посмотрите журнал"); await new Promise(z => setTimeout(z, 1200)); r = await api("/api/voice_try?key=" + key); }
     au.pause(); aux.src = "/audio/try?key=" + key + "&t=" + Date.now(); aux.play().catch(()=>{});
+    if(said) toast("Проба: «" + (said.length > 140 ? said.slice(0, 140) + "…" : said) + "»", "", 6000);
   } catch(e){ fail(e); }
   btn.disabled = false; btn.textContent = old;
+}
+// «Сбросить голос роли»: самый первый её образец — тот, с которым роль начинала книгу.
+async function voiceReset(){
+  let im = null; try { im = await api("/api/voice_impact?role=" + encodeURIComponent(V.role)); } catch(e){}
+  const what = im ? ' В открытых частях у роли фраз с записью: ' + (im.redo + im.locked) + (im.locked ? '; из них закреплённых ' + im.locked + ' — они не изменятся' : '') + '. Ещё не озвучено: ' + im.later + '.' : '';
+  dialog('<h3>Сбросить голос роли «' + esc(roleName(V.role)) + '»?</h3><p>Роль получит свой первоначальный голос — тот, с которым она начинала книгу.' + esc(what)
+    + ' Записи, сделанные этим голосом раньше, снова действуют без переозвучки; остальные фразы роли в незакреплённых частях будут помечены «переозвучить». Нынешний образец не пропадёт: он останется в «Прежних образцах этой роли».</p>',
+    [["Отмена", () => voicesDialog()], ["Сбросить голос", async () => {
+      try { V.data = await api("/api/voice_revert", {role:V.role, first:true}); await loadState(); if(S.n){ const p = await api("/api/part?n=" + S.n); setPart(p); } voicesDialog();
+            toast(V.data.same ? "У роли «" + roleName(V.role) + "» и так стоит её первоначальный голос." : "Роли «" + roleName(V.role) + "» возвращён первоначальный голос. Её фразы в открытой части — «Озвучить изменённые».", "ok", 10000); }
+      catch(e){ fail(e); voicesDialog(); } }, "pri"]]);
 }
 async function voiceSet(id, sync){
   const cur = V.data.roles.find(r => r.name === V.role) || {}, v = V.data.bank.find(x => x.id === id) || {};
   let im = null; try { im = await api("/api/voice_impact?role=" + encodeURIComponent(V.role)); } catch(e){}
-  const what = im ? ' В открытых частях у роли фраз с записью: ' + (im.redo + im.locked) + ' — ' + (im.redo ? 'переозвучки будут ждать ' + im.redo + (im.parts.length ? ' (' + im.parts.map(x => 'часть ' + x.n + ' — ' + x.count).join(', ') + ')' : '') : 'переозвучивать нечего')
-    + (im.locked ? '; закреплённых ' + im.locked + ' — они не изменятся' : '') + '. Ещё не озвучено: ' + im.later + '.' : '';
+  const what = im ? ' В открытых частях у роли фраз с записью: ' + (im.redo + im.locked) + ' — ' + (im.redo ? 'переозвучки будут ждать ' + im.redo + (im.parts.length ? ' (' + im.parts.map(x => 'часть ' + x.n + ' — ' + x.count).join(', ') + ')' : '') + ', а до переозвучки звучат прежние записи' : 'переозвучивать нечего')
+    + (im.locked ? '; закреплённых ' + im.locked + ' — они не изменятся' : '') + '. Ещё не озвучено: ' + im.later + ' — их конвейер озвучит уже новым голосом.' : '';
   const go = async () => { try { V.data = await api("/api/voice_apply", {role:V.role, voice:id}); await loadState(); if(S.n){ const p = await api("/api/part?n=" + S.n); setPart(p); } voicesDialog(); toast("Роль «" + roleName(V.role) + "» теперь говорит голосом «" + v.name + "». Её фразы в открытой части — «Озвучить изменённые».", "ok", 12000); } catch(e){ fail(e); } };
   if(cur.approved || cur.has) dialog('<h3>' + (sync ? "Обновить голос роли «" : "Сменить голос роли «") + esc(roleName(V.role)) + '»?</h3><p>' + (cur.approved ? "Голос этой роли утверждён автором. " : "") + (sync ? "Роль получит обновлённый образец голоса «" : "Новый голос — «") + esc(v.name || id) + '».' + esc(what)
     + ' Переозвучить можно всё разом («Озвучить изменённые») или по одной фразе; в любой фразе можно оставить прежнюю запись. Прежний образец сохранится — вернуть его можно в «Прежних образцах этой роли», и тогда прежние записи снова действуют без переозвучки.</p>',
@@ -2318,8 +2525,9 @@ function nowSeg(){ const k = segAt(au.currentTime || 0); return k >= 0 ? S.part.
 function markNow(){ const s = (au.paused && S.sel) ? segOf(S.sel) : nowSeg(); if(s) setSeg(s.uid, {mark: !s.mark}); }
 $("#markBtn").onclick = markNow;
 $("#redoAll").onclick = synthAll;
-$("#goNext").onclick = goNext;
-$("#goStop").onclick = goStop;
+$("#goNext").onclick = () => { const a = S.auto || {}; if(a.state === "run" || a.state === "pause" || a.state === "error") bookDialog(); else goNext(); };
+$("#goStop").onclick = () => { if((S.auto || {}).state === "run") bookPause(); else goStop(); };
+$("#btnBook").onclick = bookDialog;
 $("#btnVoices").onclick = () => voicesDialog(true);
 const needs = s => !s.locked && (s.mark || s.state === "stale" || s.state === "empty" || s.state === "lost" || s.flags.length || (s.st && (udAll() ? s.st.length : s.st.some(f => f.imp))));
 function gotoAtt(dir){
@@ -2383,7 +2591,8 @@ document.addEventListener("keydown", e => {
   }
 });
 document.addEventListener("keyup", e => { if(e.code === "Space" && (e.target.tagName || "").toLowerCase() === "button") e.preventDefault(); });
-window.addEventListener("beforeunload", () => {
+window.addEventListener("beforeunload", ev => {
+  if((S.auto || {}).state === "run"){ ev.preventDefault(); ev.returnValue = "Идёт озвучка всей книги. Если закрыть окно, она встанет на паузу."; }
   const hd = {"Content-Type":"application/json","X-Nox-Token":TOKEN};
   try { commitFree();                                         // несохранённая правка текста уходит на сервер и при закрытии окна
         if(S.ed && S.ed.dirty){ const s = segOf(S.ed.uid); if(s && !s.locked) fetch("/api/seg", {method:"POST", keepalive:true, headers:hd, body:JSON.stringify({uid:S.ed.uid, set:{role:S.ed.role, tech:edText()}})}); } } catch(e){}

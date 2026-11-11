@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-11i
+# NOX_KIT 2026-11-12a
 """
 nox_fast.py — быстрый воркер озвучки для nox_audiobook на движке faster-qwen3-tts (CUDA-графы).
 
@@ -128,20 +128,48 @@ def load_tts(model_id: str, max_seq_len: int = 2048):
 
 
 _NONSTREAM_OK = [True]
+_MINTOK_OK = [True]
+# Минимальная длина записи. Движок сам решает, когда речь кончилась («конец» — такой же кадр, как звук), и библиотека
+# запрещает ему «конец» только на первых двух кадрах (0,16 с). На очень коротких репликах («Наконец-то.», «Иди ко мне.»)
+# модель иногда ставит «конец» сразу после них: текст в подсказке целиком лёг на запись образца, и ей кажется, что всё
+# уже сказано. Выходила запись в 0,2 с без единого звука. Теперь «конец» запрещён, пока не выдано кадров на
+# 0,6 × число букв: самая быстрая речь — 15 букв/с, это 0,83 кадра на букву (кадров 12,5 в секунду), так что обычные
+# записи это не меняет — меняются только те, что обрывались, не начавшись.
+MIN_TOK_PER_LETTER = 0.6
+MIN_TOK_CAP = 48
+
+
+def min_tokens(text: str) -> int:
+    """Сколько кадров движок обязан выдать, прежде чем ему разрешён «конец речи» (2 — как в библиотеке)."""
+    letters = len(RE_LETTERS.sub("", text))
+    return max(2, min(MIN_TOK_CAP, int(letters * MIN_TOK_PER_LETTER)))
 
 
 def gen_once(model, text, prompt, cap, nonstream=False):
     """Один вызов движка -> (wav, sr). nonstream: весь текст модели сразу (если версия библиотеки умеет)."""
     kw = dict(text=text, language="Russian", voice_clone_prompt=prompt, max_new_tokens=cap)
+    mt = min_tokens(text)
+    if mt > 2 and _MINTOK_OK[0]:
+        kw["min_new_tokens"] = max(2, min(mt, int(cap) - 1))
     if nonstream and _NONSTREAM_OK[0]:
+        kw["non_streaming_mode"] = True
+    for _ in range(2):                                   # библиотека постарше может не знать одного из двух ключей
         try:
-            wavs, sr = model.generate_voice_clone(non_streaming_mode=True, **kw)
+            wavs, sr = model.generate_voice_clone(**kw)
             return wavs[0], sr
         except TypeError as e:
-            if "non_streaming_mode" not in str(e):
+            s = str(e)
+            if "non_streaming_mode" in s and "non_streaming_mode" in kw:
+                _NONSTREAM_OK[0] = False
+                kw.pop("non_streaming_mode")
+                print("  (эта версия движка не умеет «весь текст сразу» — работаю как обычно)", flush=True)
+            elif "min_new_tokens" in s and "min_new_tokens" in kw:
+                _MINTOK_OK[0] = False
+                kw.pop("min_new_tokens")
+                print("  (эта версия движка не умеет «минимальную длину записи» — короткие реплики защищает только "
+                      "переозвучка)", flush=True)
+            else:
                 raise
-            _NONSTREAM_OK[0] = False
-            print("  (эта версия движка не умеет «весь текст сразу» — работаю как обычно)", flush=True)
     wavs, sr = model.generate_voice_clone(**kw)
     return wavs[0], sr
 
@@ -699,7 +727,8 @@ def main():
                     _ns = ns0 if (attempt % 2 == 0 or letters >= 40) else (not ns0)   # короткой — иначе
                     _dot = plan.get("end_dot") or (letters < 40 and attempt >= 2 and speech_fail)
                     text = end_dot(text0) if _dot else text0
-                    _xv = bool(plan.get("xvec")) and attempt % 2 == 0 and not state.get("xv_bad")
+                    _xv = ((bool(plan.get("xvec")) and attempt % 2 == 0)
+                           or (speech_fail and letters < 24 and attempt >= 2)) and not state.get("xv_bad")
                     try:
                         x, sr, raw, hit, ins = synth_text(model, text, prompt_xv(role) if _xv else prompt_for(role),
                                                           cap_try, nonstream=_ns, suffix=tail_sfx, split=split_sent,
@@ -854,7 +883,7 @@ def main():
         return why, dict(rate=round(rate, 1), tail_db=round(float(tdb), 1), vowel_ms=vc, speech_s=round(sp, 2),
                          voiced_s=None if vo is None else round(vo, 2), letters=letters)
 
-    prompts_ref = {}
+    prompts_ref, prompts_ref_xv = {}, {}
 
     def serve_one(req: dict) -> dict:
         roles_fresh()
@@ -871,6 +900,7 @@ def main():
                 ref_text = rt.read_text(encoding="utf-8").strip() if rt.is_file() else ""
                 if len(prompts_ref) >= 12:
                     prompts_ref.clear()
+                    prompts_ref_xv.clear()
                 prompts_ref[rkey] = get_model().model.create_voice_clone_prompt(
                     ref_audio=padded_ref(rw, ref_sil), ref_text=ref_text, x_vector_only_mode=args.xvec or not ref_text)
         elif role not in roles["roles"]:
@@ -890,31 +920,68 @@ def main():
         raw_text = str(req.get("raw") or text.replace("\u0301", ""))
         model = get_model()
         cap = int(min(args.max_new_tokens, len(text) * 2.4 + 40))
-        best = None
-        for attempt in range(tries):
+        # Что пробуем. Сначала — как просили: tries раз, режимы движка вперемежку. Если речи так и нет (тишина, обрывок,
+        # шум без голоса) — «спасательные» попытки: голос по отпечатку образца (x-vector — без записи образца в подсказке
+        # модели нечего «продолжать», и короткая реплика начинается с чистого листа), потом то же с точкой на конце
+        # («Наконец-то,» -> «Наконец-то.»). Берётся первая запись без замечаний; иначе лучшая, причём запись с речью
+        # всегда лучше записи без неё. Заявка может запретить это ключом "rescue": false.
+        steps = [dict(ns=ns if a % 2 == 0 else (not ns), xv=xv, dot=False, extra=False) for a in range(tries)]
+        if req.get("rescue", True) is not False:
+            steps += [dict(ns=ns, xv=True, dot=False, extra=True), dict(ns=not ns, xv=True, dot=False, extra=True),
+                      dict(ns=ns, xv=True, dot=False, extra=True),
+                      dict(ns=ns, xv=False, dot=True, extra=True), dict(ns=not ns, xv=True, dot=True, extra=True)]
+        text_dot = end_dot(text)
+        best, done_k = None, 0
+        for st_ in steps:
+            if st_["extra"] and not (best is not None and _ABSENT_WHY.search(", ".join(best[2]))):
+                break                                       # речь есть — спасать нечего
+            if st_["xv"] and state.get("xv_bad"):
+                continue
+            if st_["dot"] and text_dot == text:
+                continue                                    # на конце и так точка, ! или ? — такая попытка уже была
+            t_use = text_dot if st_["dot"] else text
             vinfo = {}
-            _ns = ns if attempt % 2 == 0 else (not ns)
-            if ref:
-                x, sr, raw, hit, ins = synth_text(model, text, prompts_ref[rkey], cap, nonstream=_ns, suffix=tail_sfx,
-                                                  split=split_sent, pause_s=sent_pause, min_letters=split_min,
-                                                  ref_hz=ref_f0(rw) if vguard else None, role="проба:" + rw.stem, info=vinfo)
-            else:
-                x, sr, raw, hit, ins = synth_text(model, text, prompt_xv(role) if xv else prompt_for(role), cap,
-                                                  nonstream=_ns, suffix=tail_sfx, split=split_sent, pause_s=sent_pause,
-                                                  min_letters=split_min, ref_hz=ref_hz_for(role), role=role, info=vinfo)
-            why, met = take_report(x, sr, text, raw_text, hit, ins, vinfo)
+            try:
+                if ref:
+                    if st_["xv"] and rkey not in prompts_ref_xv:
+                        prompts_ref_xv[rkey] = model.model.create_voice_clone_prompt(
+                            ref_audio=padded_ref(rw, ref_sil), ref_text="", x_vector_only_mode=True)
+                    x, sr, raw, hit, ins = synth_text(model, t_use, prompts_ref_xv[rkey] if st_["xv"] else prompts_ref[rkey],
+                                                      cap, nonstream=st_["ns"], suffix=tail_sfx, split=split_sent,
+                                                      pause_s=sent_pause, min_letters=split_min,
+                                                      ref_hz=ref_f0(rw) if vguard else None, role="проба:" + rw.stem,
+                                                      info=vinfo)
+                else:
+                    x, sr, raw, hit, ins = synth_text(model, t_use, prompt_xv(role) if st_["xv"] else prompt_for(role), cap,
+                                                      nonstream=st_["ns"], suffix=tail_sfx, split=split_sent,
+                                                      pause_s=sent_pause, min_letters=split_min, ref_hz=ref_hz_for(role),
+                                                      role=role, info=vinfo)
+            except Exception as e_xv:
+                if not st_["xv"] or best is None:
+                    raise
+                # запасной путь на этой машине не работает — остаёмся с тем, что есть, и больше его не пробуем
+                state["xv_bad"] = True
+                print(f"{tag} голос по отпечатку образца недоступен ({type(e_xv).__name__}: {str(e_xv)[:80]}) — дальше без него",
+                      flush=True)
+                continue
+            done_k += 1
+            why, met = take_report(x, sr, t_use, raw_text, hit, ins, vinfo)
             if hit:
                 cap = int(min(cap * 1.6, args.max_new_tokens))
-            if best is None or len(why) < len(best[2]):
-                best = (x, sr, why, met, _ns, attempt + 1)
+            score = (1 if _ABSENT_WHY.search(", ".join(why)) else 0, len(why))
+            if best is None or score < best[0]:
+                best = (score, x, why, met, dict(st_), done_k, sr)
             if not why:
                 break
-        x, sr, why, met, _ns, att = best
+        score, x, why, met, st_, att, sr = best
+        how = ", ".join(w for w, on in (("голос по отпечатку образца", st_["xv"] and not xv),
+                                        ("точка на конце", st_["dot"])) if on) if st_["extra"] else ""
         out = Path(str(req["out"]))
         out.parent.mkdir(parents=True, exist_ok=True)
         n.write_wav_atomic(out, x, sr)
-        return dict(ok=True, dur=round(len(x) / sr, 3), sr=sr, why=why, attempts=att, method=method, role=role,
-                    text=text, variant={"nonstream": _ns, "xvec": xv}, worker=args.worker,
+        return dict(ok=True, dur=round(len(x) / sr, 3), sr=sr, why=why, attempts=att, tried=done_k, method=method, role=role,
+                    text=text, variant={"nonstream": st_["ns"], "xvec": bool(st_["xv"]), "end_dot": bool(st_["dot"])},
+                    rescue=how, silent=bool(score[0]), worker=args.worker,
                     vsig=None if ref else fresh_vsig(role), **met)
 
     def serve_queue() -> int:
@@ -967,7 +1034,10 @@ def main():
             k += 1
             qstat["served"] += 1
             print(f"{tag} заявка редактора {rid}: {'готово' if res.get('ok') else 'ошибка: ' + str(res.get('error'))}"
-                  + (f" ({', '.join(res['why'])})" if res.get("why") else "") + f" за {res['sec']:.1f} с", flush=True)
+                  + (f" ({', '.join(res['why'])})" if res.get("why") else "")
+                  + (f"; попыток {res['tried']}" if int(res.get("tried") or 1) > 1 else "")
+                  + (f"; помогло: {res['rescue']}" if res.get("rescue") and not res.get("silent") else "")
+                  + (" — РЕЧИ НЕТ" if res.get("silent") else "") + f" за {res['sec']:.1f} с", flush=True)
         return k
 
     if args.serve:

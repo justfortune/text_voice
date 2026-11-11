@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-11i
+# NOX_KIT 2026-11-12a
 """
 nox_voices.py — БАНК ГОЛОСОВ и подбор голосов ролям. Свои голоса записывать не нужно.
 
@@ -18,6 +18,7 @@ nox_voices.py — БАНК ГОЛОСОВ и подбор голосов рол�
   prepare --root КНИГА [--all]     дать голоса ролям текущей части (с --all — всей книги), у которых нет образца
   suggest --root КНИГА [--all] [--json]   только показать подбор, ничего не меняя
   apply   --root КНИГА --role РОЛЬ --voice ID   поставить роли голос из банка (прежний образец — в work\\voices_old)
+  revert  --root КНИГА --role РОЛЬ --first      сбросить голос роли: вернуть самый первый её образец
   revert  --root КНИГА --role РОЛЬ [--file ИМЯ]   вернуть роли прежний образец (тот, что был до последней смены, или любой
                                    из work\\voices_old — его имя показывает history)
   history --root КНИГА --role РОЛЬ [--json]   прежние образцы роли (work\\voices_old), от новых к старым
@@ -895,6 +896,12 @@ def cmd_revert(a):
     stems = n.voice_stems(roles)
     wav_p, txt_p = n.voice_files(a.role, stems)
     pick = str(getattr(a, "file", "") or "")
+    if getattr(a, "first", False):                       # «сбросить голос роли»: самый первый её образец
+        pat = re.compile(re.escape(wav_p.stem) + r"__[0-9]{8}-[0-9]{6}(-[0-9]+)?$")
+        olds = sorted((f.stem for f in old.glob(wav_p.stem + "__*.wav") if pat.match(f.stem))) if old.is_dir() else []
+        if not olds:
+            sys.exit(f"голос роли «{a.role}» ещё не меняли — сбрасывать нечего: у неё стоит первоначальный образец")
+        pick = olds[0]                                   # имена — с датой и временем: первый по алфавиту = самый ранний
     if pick:                                             # любой прежний образец этой роли — по имени из history
         if not re.fullmatch(re.escape(wav_p.stem) + r"__[0-9]{8}-[0-9]{6}(-[0-9]+)?", pick):
             sys.exit(f"«{pick}» — не прежний образец роли «{a.role}» (их имена показывает history)")
@@ -1174,6 +1181,7 @@ def main() -> int:
         if name == "revert":
             s.add_argument("--role", required=True)
             s.add_argument("--file", default="", help="имя прежнего образца из work\\voices_old (без расширения), см. history")
+            s.add_argument("--first", action="store_true", help="самый первый образец роли — тот, с которым она начинала книгу")
         if name == "history":
             s.add_argument("--role", required=True)
         if name == "tidy":

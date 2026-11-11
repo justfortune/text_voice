@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-11i
+# NOX_KIT 2026-11-12a
 """
 nox_stress.py — САМОПРОВЕРКА УДАРЕНИЙ В ЧАСТИ. Ничего в книге не меняет.
 

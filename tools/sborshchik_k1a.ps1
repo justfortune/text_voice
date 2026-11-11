@@ -1,5 +1,5 @@
 ﻿# sborshchik_k1a.ps1 — СБОРЩИК-ПРОВЕРКА: что с книгой сейчас, что сломано, что починится само и что делать по порядку.
-# NOX_SBOR 2026-11-11i
+# NOX_SBOR 2026-11-12a
 #
 # ТОЛЬКО ЧТЕНИЕ. Без ключа -Fix скрипт ничего не меняет, не удаляет и не останавливает ни в D:\kniga1a, ни в
 # D:\nox_audiobook, ни в Загрузках. Он смотрит:
@@ -43,7 +43,7 @@ if ($IsWin) { chcp 65001 | Out-Null }
 if (-not $Downloads) { $Downloads = Join-Path $env:USERPROFILE "Downloads" }
 if (-not $Yandex) { $Yandex = Join-Path $env:USERPROFILE "YandexDisk" }
 
-$KIT = "2026-11-11i"
+$KIT = "2026-11-12a"
 $KITFILES = @("go_kniga1a.ps1", "prep_kniga1a.ps1", "run_fast.ps1", "cleanup_k1a.ps1", "nox_fast.py", "verify_k1a.py", "nox_part.py",
               "nox_stress.py", "nox_voices.py", "voicecheck_k1a.py", "nastroyki_ozvuchki.py", "razmetka_k1a.py", "zvuk_k1a.py",
               "voices_kniga1a.py", "nox_studio.py", "nox_studio.html", "nox_studio.ps1", "nox_cues.py", "nox_import.py")
@@ -837,7 +837,7 @@ try {
         ListDir (Join-Path $Root "work") "spisok_work.txt" $false
         ListDir (Join-Path $Root "studio") "spisok_studio.txt" $false
         ListDir (Join-Path $Root "parts") "spisok_parts.txt" $false
-        ListDir (Join-Path $Root "gotovo") "spisok_gotovo.txt" $false
+        ListDir (Join-Path $Root "gotovo") "spisok_gotovo.txt" $true
         ListDir (Join-Path $Root "logs") "spisok_logs.txt" $true
         ListDir $Src "spisok_sreda.txt" $false
         try {
@@ -851,12 +851,16 @@ try {
             $fp = Join-Path (Join-Path $Root "work") $f
             if ((Test-Path -LiteralPath $fp) -and (Get-Item -LiteralPath $fp).Length -lt 3MB) { Copy-Item -LiteralPath $fp -Destination (Join-Path $tmp ("work_" + $f)) -ErrorAction SilentlyContinue }
         }
+        foreach ($f in @("auto_book.json")) {
+            $fp = Join-Path (Join-Path $Root "studio") $f
+            if ((Test-Path -LiteralPath $fp) -and (Get-Item -LiteralPath $fp).Length -lt 3MB) { Copy-Item -LiteralPath $fp -Destination (Join-Path $tmp ("studio_" + $f)) -ErrorAction SilentlyContinue }
+        }
         $segf = Join-Path (Join-Path $Root "work") "segments.csv"
         if (Test-Path -LiteralPath $segf) { try { [IO.File]::WriteAllLines((Join-Path $tmp "work_segments_nachalo.txt"), [string[]]@(Get-Content -LiteralPath $segf -TotalCount 40 -Encoding UTF8), $utf8) } catch {} }
         $logs = @(Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq ".log" -or $_.Name -eq "log_fast.txt" }) +
                 @(Get-ChildItem -LiteralPath (Join-Path $Root "work") -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @("failed.txt", "asr_log.txt", "asr_suspicious.txt", "part_check.txt") }) +
                 @(Get-ChildItem -LiteralPath (Join-Path $Root "studio") -File -Filter "studio.log" -ErrorAction SilentlyContinue)
-        foreach ($l in $logs) { try { [IO.File]::WriteAllLines((Join-Path $tmp ("hvost_" + $l.Name + ".txt")), [string[]]@(Get-Content -LiteralPath $l.FullName -Tail 200 -Encoding UTF8), $utf8) } catch {} }
+        foreach ($l in $logs) { $tn = 200; if ($l.Name -like "studio*.log") { $tn = 500 }; try { [IO.File]::WriteAllLines((Join-Path $tmp ("hvost_" + $l.Name + ".txt")), [string[]]@(Get-Content -LiteralPath $l.FullName -Tail $tn -Encoding UTF8), $utf8) } catch {} }
         if (Test-Path -LiteralPath $zipFile) { Remove-Item -LiteralPath $zipFile -Force }
         Compress-Archive -Path (Join-Path $tmp "*") -DestinationPath $zipFile -Force
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

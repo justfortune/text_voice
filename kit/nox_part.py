@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-11i
+# NOX_KIT 2026-11-12a
 """
 nox_part.py — СБОРКА ТЕКУЩЕЙ ЧАСТИ в режиме «по частям».
 

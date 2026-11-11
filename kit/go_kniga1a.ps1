@@ -63,7 +63,7 @@ Use-Newest "nox_part*.py" "nox_part.py"
 Use-Newest "nox_stress*.py" "nox_stress.py"
 Use-Newest "nox_voices*.py" "nox_voices.py"
 # Все файлы комплекта должны быть одной версии: старый файл в Загрузках (не скачался) — стоп, с понятным списком
-$KIT = "NOX_KIT 2026-11-11i"
+$KIT = "NOX_KIT 2026-11-12a"
 $env:NOX_FROM_GO = "1"      # prep и установщик студии узнают, что их запустил go: их советы для ручного запуска не печатаются
 $kitFiles = @("prep_kniga1a.ps1", "nox_fast.py", "verify_k1a.py", "voicecheck_k1a.py", "nastroyki_ozvuchki.py", "razmetka_k1a.py", "zvuk_k1a.py",
               "nox_part.py", "nox_stress.py", "nox_voices.py")
