@@ -1,0 +1,37 @@
+# Публикуется только код. Всё, что не разрешено ниже, в репозиторий не попадает.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/kit/
+!/tools/
+!/base/
+!/data/
+
+# Никогда — даже внутри разрешённых папок: рукопись, звук, проекты студии, таблицы, архивы, рабочие данные книги.
+*.docx
+*.doc
+*.pdf
+*.epub
+*.fb2
+*.wav
+*.mp3
+*.m4a
+*.m4b
+*.flac
+*.ogg
+*.opus
+*.noxproj
+*.xlsx
+*.zip
+*.7z
+*.safetensors
+*.log
+__pycache__/
+speaker_overrides*.tsv
+stress_fixes*.tsv
+segments*.csv
+roles*.json
+edits*.json
+Сценарий_по_ролям*
+Исправления_ролей*
