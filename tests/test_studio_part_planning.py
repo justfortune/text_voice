@@ -35,7 +35,8 @@ class SharedPartDurationContractTests(unittest.TestCase):
             {"pause_before_ms": 550, "kind": "text"},
         ]
         s.wavs = [Path("a.wav"), Path("b.wav"), Path("c.wav")]
-        with patch.object(audiobook, "load_durations", return_value={}), \
+        with patch.object(studio, "n", audiobook), \
+             patch.object(audiobook, "load_durations", return_value={}), \
              patch.object(audiobook, "duration_of", return_value=50.0):
             planned = s.own_plan(0)
         # At speed 0.8, 2 min final duration needs 96 s source.
