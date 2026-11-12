@@ -269,20 +269,32 @@ def safe_file(name: str) -> str:
 
 
 def pid_alive(pid: int) -> bool:
-    """Жив ли процесс. В Windows os.kill(pid, 0) процесс УБИВАЕТ — поэтому через OpenProcess."""
+    """Проверяет PID без сигналов. Ошибка доступа/проверки означает «считаем живым» (fail-closed)."""
     if pid <= 0:
         return False
     if os.name == "nt":
         try:
             import ctypes
-            k = ctypes.windll.kernel32
-            h = k.OpenProcess(0x1000, False, int(pid))              # PROCESS_QUERY_LIMITED_INFORMATION
-            if not h:
-                return False
-            code = ctypes.c_ulong()
-            ok = k.GetExitCodeProcess(h, ctypes.byref(code))
-            k.CloseHandle(h)
-            return bool(ok) and code.value == 259                   # STILL_ACTIVE
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                # Только ERROR_INVALID_PARAMETER (87) доказывает, что PID отсутствует.
+                # ACCESS_DENIED и прочие ошибки не дают права объявлять процесс мёртвым.
+                return ctypes.get_last_error() != 87
+            try:
+                code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return True
+                return code.value == 259  # STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
         except Exception:
             return True
     try:
