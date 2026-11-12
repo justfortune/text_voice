@@ -177,7 +177,7 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS):
             return
         if len(piece) > max_chars:
             # Резервное деление по словам; сверхдлинное «слово» режется только в крайнем случае.
-            for word in re.findall(r"\\S+", piece):
+            for word in re.findall(r"\S+", piece):
                 while len(word) > max_chars:
                     if cur:
                         chunks.append(cur)
@@ -203,7 +203,7 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS):
             append_piece(sentence)
             continue
         # Сначала сохраняем естественные границы по запятым, точкам с запятой и двоеточиям.
-        for fragment in re.split(r"(?<=[,;:])\\s+", sentence):
+        for fragment in re.split(r"(?<=[,;:])\s+", sentence):
             append_piece(fragment)
     if cur:
         chunks.append(cur)
