@@ -1106,8 +1106,6 @@ async function ownRecord(uid, file){
   finally { S.posts--; t.remove(); }
 }
 // ---------------------------------------------------------------- запись собственного голоса непосредственно с микрофона
-let MIC = null;
-// ---------------------------------------------------------------- запись собственного голоса непосредственно с микрофона
 let MIC = null, MIC_REVIEW_URL = "";
 async function recordOwn(uid){
   const s = segOf(uid); if(!s) return;
