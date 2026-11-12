@@ -2188,7 +2188,7 @@ class Studio:
             out.parent.mkdir(parents=True, exist_ok=True)
             rid = f"q{int(time.time() * 1000):x}{secrets.token_hex(2)}"
             req = dict(rid=rid, role=ef["role"], text=ef["tech"], raw=ef["tech"].replace(ACUTE, ""), out=str(out),
-                       variant=variant or {}, tries=2, rescue=True)
+                       variant=variant or {}, tries=2, rescue=True, atomic=bool(e.get("join")))
             ch = self.chain(i)
             prep = ACUTE not in ef["tech"] and (bool(self.rows[i].get("ins"))        # вставка без ударений: их расставит движок
                                                 or (ef["tech_src"] != "manual" and self.accent_mode() != "none"
