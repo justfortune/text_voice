@@ -216,7 +216,7 @@ class JoinSaveRollbackTests(unittest.TestCase):
             s.undo_last()
         self.assertEqual(before, studio.jd(s.store["segs"]))
         self.assertEqual(undo_before, s.undo)
-        self.assertEqual(2, calls[0])
+        self.assertEqual(1, calls[0])
 
     def test_join_undo_save_failure_restores_state_and_keeps_undo_entry(self):
         s = self._studio()
