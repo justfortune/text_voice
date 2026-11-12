@@ -1600,7 +1600,7 @@ window.addEventListener("resize", draw);
 // ================================================================ ЗВУКИ, ФОН И МУЗЫКА: дорожки на ленте
 const CUE_KINDS = ["sfx", "amb", "mus"], CUE_NAME = {sfx:"Звук", amb:"Фон", mus:"Музыка"}, LANE_NAME = {sfx:"звуки", amb:"фон", mus:"музыка"};
 const CUE_VAR = {sfx:"--sfx", amb:"--amb", mus:"--mus"};
-const SND_RE = /\.(wav|mp3|ogg|oga|flac|m4a|aac|opus|wma|aif|aiff)$/i;
+const SND_RE = /\.(wav|webm|mp3|ogg|oga|flac|m4a|aac|opus|wma|aif|aiff)$/i;
 function cueOf(id){ return S.part && S.part.cues ? S.part.cues.find(c => c.id === id) : null; }
 // Высота дорожки: обычно 22; когда на ней 3–4 звука сразу (несколько петель фона) — по 11 на строку, чтобы подписи читались
 function laneH(kd){ const r = ((S.part && S.part.laneRows) || {})[kd] || 1; return r > 2 ? 11 * r : 22; }
@@ -2264,6 +2264,8 @@ function dialog(html, buttons){
 }
 function closeDialog(){ $("#veil").hidden = true; $("#dlg").classList.remove("wide"); aux.pause(); if(PICK && PICK.sel === "#insRoleRow") PICK.close(); }
 $("#veil").addEventListener("mousedown", e => { if(e.target.id === "veil") closeDialog(); });
+$("#veil").addEventListener("mousedown", e => { if(e.target.id === "veil" && MIC) { micCancel(); toast("Запись микрофона отменена.", "", 4000); } });
+window.addEventListener("keydown", e => { if(e.key === "Escape" && MIC) { micCancel(); toast("Запись микрофона отменена.", "", 4000); } }, true);
 function partStatus(p){
   if(!p.opened) return "черновик конвейера";
   if(p.locked) return (!p.export ? "закреплена, файла нет" : p.export.fresh ? "закреплена, файл собран" : "закреплена, файл устарел") + (p.auto ? " — принята без прослушивания" : "");
