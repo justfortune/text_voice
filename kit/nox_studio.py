@@ -2217,15 +2217,15 @@ class Studio:
                     if any((self.store["segs"].get(d[q]) or {}).get("locked") for q in ("a", "b")):
                         self.undo.append((uid, old, label))
                         raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
-                    for q, w in (("a", "ea"), ("b", "eb")):
-                        cur = self.store["segs"].get(d[q]) or {}
-                        if d[w] is None:
-                            self.store["segs"].pop(d[q], None)
-                        else:
-                            d[w]["tseq"] = max(int(d[w].get("tseq", 0)), int(cur.get("tseq", 0)))       # дубли не теряем
-                            self.store["segs"][d[q]] = d[w]
-                    self.joins_refresh()
                     try:
+                        for q, w in (("a", "ea"), ("b", "eb")):
+                            cur = self.store["segs"].get(d[q]) or {}
+                            if d[w] is None:
+                                self.store["segs"].pop(d[q], None)
+                            else:
+                                d[w]["tseq"] = max(int(d[w].get("tseq", 0)), int(cur.get("tseq", 0)))       # дубли не теряем
+                                self.store["segs"][d[q]] = d[w]
+                        self.joins_refresh()
                         self.save("отмена: " + label, {"uid": d["a"]})
                     except Exception:
                         self.store["segs"] = json.loads(snap_before)
