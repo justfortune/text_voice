@@ -1165,6 +1165,7 @@ def plan_parts(rows, roles, minutes: float):
     for i, key in enumerate(keys):
         key_positions.setdefault(key, []).append(i)
     frozen = []
+    legacy_ambiguous = False
     try:
         saved = json.loads(PARTS_INDEX.read_text(encoding="utf-8"))
         for p in saved:
@@ -1176,6 +1177,7 @@ def plan_parts(rows, roles, minutes: float):
                 starts = key_positions.get(p.get("start"), [])
                 ends = key_positions.get(p.get("end"), [])
                 if len(starts) != 1 or len(ends) != 1:
+                    legacy_ambiguous = True
                     break
                 a, b = starts[0], ends[0]
             if a is None or b is None or b < a or (frozen and a != frozen[-1][1] + 1) or (not frozen and a != 0):
@@ -1183,6 +1185,10 @@ def plan_parts(rows, roles, minutes: float):
             frozen.append((a, b))
     except Exception:
         frozen = []
+    if legacy_ambiguous:
+        raise ValueError("work/parts.json содержит старые неоднозначные границы (повторяющиеся реплики). "
+                         "Автоматическая миграция остановлена, чтобы не перепутать части; сохраните старый индекс "
+                         "и готовые файлы частей перед ручной перестройкой.")
     # сколько сегментов готово подряд с начала книги
     ready = 0
     while ready < len(rows) and wav_for(rows[ready], roles).exists():
