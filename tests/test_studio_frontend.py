@@ -47,7 +47,7 @@ class StudioFrontendTests(unittest.TestCase):
             'scope === "para"',
             'api("/api/join",{uid:headUid})',
             'api("/api/unjoin",{uid:headUid})',
-            "не удалось автоматически отменить соединение абзаца",
+            "Не удалось автоматически отменить соединение абзаца",
             "Исходные записи фраз сохранены",
         ):
             self.assertIn(token, self.html)
