@@ -1156,7 +1156,12 @@ async function recordOwn(uid){
        ["Перезаписать",()=>{micReviewClear();recordOwn(uid);}],
        ["Сохранить дубль",async()=>{micReviewClear();await ownRecord(uid,file);},"pri"]]);
   };
-  rec.start(500);
+  try { rec.start(500); }
+  catch(e){
+    micRelease(); closeDialog();
+    toast("Не удалось начать запись: "+(e&&e.message||e),"red",9000);
+    return;
+  }
   if(analyser){
     const data=new Uint8Array(analyser.fftSize);
     MIC.meterTimer=setInterval(()=>{
