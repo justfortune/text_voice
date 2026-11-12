@@ -50,6 +50,23 @@ class DurationCacheTests(unittest.TestCase):
             self.assertAlmostEqual(0.06, second)
 
 
+class PartIndexTests(unittest.TestCase):
+    def test_ambiguous_legacy_hash_boundaries_fail_closed(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            index = root / "parts.json"
+            index.write_text(json.dumps([{"n": 1, "start": "same", "end": "same"}]), encoding="utf-8")
+            rows = [
+                {"id": 1, "speaker": "narrator", "text": "повтор", "pause_before_ms": 0, "kind": "text"},
+                {"id": 2, "speaker": "narrator", "text": "повтор", "pause_before_ms": 0, "kind": "text"},
+            ]
+            with patch.object(n, "PARTS_INDEX", index), patch.object(n, "load_durations", return_value={}), \\
+                 patch.object(n, "wav_for", side_effect=lambda row, roles: root / "same.wav"):
+                with self.assertRaisesRegex(ValueError, "неоднозначные границы"):
+                    n.plan_parts(rows, {}, 10)
+
+
 class LockTests(unittest.TestCase):
     def test_claim_is_exclusive_and_release_is_owner_checked(self):
         with tempfile.TemporaryDirectory() as td:
