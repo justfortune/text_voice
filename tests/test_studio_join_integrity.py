@@ -107,28 +107,28 @@ class StudioPidSafetyTests(unittest.TestCase):
         for exit_code, expected in ((259, True), (0, False)):
             with self.subTest(exit_code=exit_code):
                 kernel32, closed = self._windows_api(exit_code=exit_code)
-                with patch.object(studio.os, "name", "nt"), \\
+                with patch.object(studio.os, "name", "nt"), \
                      patch.object(ctypes, "WinDLL", return_value=kernel32, create=True):
                     self.assertIs(expected, studio.pid_alive(123))
                 self.assertEqual([1234], closed)
 
     def test_windows_access_denied_is_not_mistaken_for_dead_process(self):
         kernel32, _ = self._windows_api(open_handle=0)
-        with patch.object(studio.os, "name", "nt"), \\
-             patch.object(ctypes, "WinDLL", return_value=kernel32, create=True), \\
+        with patch.object(studio.os, "name", "nt"), \
+             patch.object(ctypes, "WinDLL", return_value=kernel32, create=True), \
              patch.object(ctypes, "get_last_error", return_value=5, create=True):
             self.assertTrue(studio.pid_alive(123))
 
     def test_windows_missing_pid_is_confirmed_only_by_invalid_parameter(self):
         kernel32, _ = self._windows_api(open_handle=0)
-        with patch.object(studio.os, "name", "nt"), \\
-             patch.object(ctypes, "WinDLL", return_value=kernel32, create=True), \\
+        with patch.object(studio.os, "name", "nt"), \
+             patch.object(ctypes, "WinDLL", return_value=kernel32, create=True), \
              patch.object(ctypes, "get_last_error", return_value=87, create=True):
             self.assertFalse(studio.pid_alive(123))
 
     def test_windows_exit_code_query_failure_is_conservative(self):
         kernel32, closed = self._windows_api(exit_ok=0)
-        with patch.object(studio.os, "name", "nt"), \\
+        with patch.object(studio.os, "name", "nt"), \
              patch.object(ctypes, "WinDLL", return_value=kernel32, create=True):
             self.assertTrue(studio.pid_alive(123))
         self.assertEqual([1234], closed)
