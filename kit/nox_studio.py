@@ -1096,70 +1096,68 @@ class Studio:
             ub = self.uids[j]
             if (self.store["segs"].get(ub) or {}).get("join"):
                 raise Oops(f"следующая фраза (№ {rb['id']}) сама соединена с соседней — сначала разъедините её")
-            ea, eb = self.E(uid, create=True), self.E(ub, create=True)
-            if ea.get("locked") or eb.get("locked"):
-                raise Oops("фраза закреплена — сначала снимите закрепление")
             if any(q["uid"] in (uid, ub) and q["status"] in ("queued", "running") for q in self.jobs.values()):
                 raise Oops("одна из этих фраз сейчас озвучивается — дождитесь дубля")
-            efa, efb, sca, scb = self.eff(i), self.eff(j), self.src(i), self.src(j)
-            if sca.get("imp") or scb.get("imp"):
-                raise Oops("у одной из фраз звучит ваша собственная запись — такие фразы не соединяются: "
-                           "поставьте ей дубль движка или дайте одну свою запись на обе фразы (U, затем «дальше по этой записи»)")
-            if efa["role"] != efb["role"] and not force:
-                who = lambda r: "Рассказчик" if r == "narrator" else r
-                raise Oops(f"у фраз разные голоса ({who(efa['role'])} и {who(efb['role'])}) — соединённую фразу целиком прочтёт {who(efa['role'])}")
-            snap = jd({"a": uid, "ea": ea, "b": ub, "eb": eb})
-            was_a, was_b = json.loads(jd(ea)), json.loads(jd(eb))
-            tech_new = norm_t(efa["tech"].strip() + " " + efb["tech"].strip())
-            spoken = None
-            if sca["path"] is not None and scb["path"] is not None:
-                spoken = norm_t((sca["tech"] or efa["tech"]).strip() + " " + (scb["tech"] or efb["tech"]).strip())
-            ea.setdefault("jwas", []).append({q: ea.get(q) for q in ("tech", "take", "after")})
-            ea.setdefault("join", []).append(ub)
-            eb["into"] = uid
-            if eb.get("after"):
-                ea["after"] = eb["after"]                  # пауза после соединённой фразы — та, что была после второй
-            else:
-                ea.pop("after", None)
-            self.joins_refresh()
-            if norm_t(self.auto_tech(i)[0]) == tech_new:
-                ea.pop("tech", None)
-            else:
-                ea["tech"] = tech_new
+            # E(create=True), joins_refresh и _glue могут менять несколько связанных структур.
+            # Снимок делается до первого такого изменения, а rollback восстанавливает их напрямую.
+            segs_before = json.loads(jd(self.store["segs"]))
+            abs_before = dict(self._abs)
+            undo_before = list(self.undo)
+            takes_before = dict(self._takes)
             tid = None
             try:
+                ea, eb = self.E(uid, create=True), self.E(ub, create=True)
+                if ea.get("locked") or eb.get("locked"):
+                    raise Oops("фраза закреплена — сначала снимите закрепление")
+                efa, efb, sca, scb = self.eff(i), self.eff(j), self.src(i), self.src(j)
+                if sca.get("imp") or scb.get("imp"):
+                    raise Oops("у одной из фраз звучит ваша собственная запись — такие фразы не соединяются: "
+                               "поставьте ей дубль движка или дайте одну свою запись на обе фразы (U, затем «дальше по этой записи»)")
+                if efa["role"] != efb["role"] and not force:
+                    who = lambda r: "Рассказчик" if r == "narrator" else r
+                    raise Oops(f"у фраз разные голоса ({who(efa['role'])} и {who(efb['role'])}) — соединённую фразу целиком прочтёт {who(efa['role'])}")
+                was_a, was_b = json.loads(jd(ea)), json.loads(jd(eb))
+                tech_new = norm_t(efa["tech"].strip() + " " + efb["tech"].strip())
+                spoken = None
+                if sca["path"] is not None and scb["path"] is not None:
+                    spoken = norm_t((sca["tech"] or efa["tech"]).strip() + " " + (scb["tech"] or efb["tech"]).strip())
+                ea.setdefault("jwas", []).append({q: ea.get(q) for q in ("tech", "take", "after")})
+                ea.setdefault("join", []).append(ub)
+                eb["into"] = uid
+                if eb.get("after"):
+                    ea["after"] = eb["after"]
+                else:
+                    ea.pop("after", None)
+                self.joins_refresh()
+                if norm_t(self.auto_tech(i)[0]) == tech_new:
+                    ea.pop("tech", None)
+                else:
+                    ea["tech"] = tech_new
                 if spoken is not None:
                     vs = ""
                     if efa["role"] == efb["role"] and not self.voice_stale(efa, sca, was_a) and not self.voice_stale(efb, scb, was_b):
-                        vs = self.vsig_now(efa["role"])     # обе записи — нынешним голосом роли
+                        vs = self.vsig_now(efa["role"])
                     tid = self._glue(i, ea, sca, scb, efa["role"], spoken, "" if vs == "nov" else vs)
                     ea["take"] = tid
-            except Exception:
-                d = json.loads(snap)                       # склейка не вышла — всё как было
-                self.store["segs"][uid], self.store["segs"][ub] = d["ea"], d["eb"]
-                self.joins_refresh()
-                raise
-            undo_before = list(self.undo)
-            self.undo.append(("#join", snap, "соединение фраз"))
-            del self.undo[:-80]
-            try:
+                self.undo.append(("#join", jd({"a": uid, "ea": segs_before.get(uid, {}),
+                                                "b": ub, "eb": segs_before.get(ub, {})}), "соединение фраз"))
+                del self.undo[:-80]
                 self.save("фразы соединены", {"uid": uid, "id": ra["id"], "with": rb["id"], "take": tid})
+                return dict(uid=uid, take=tid, count=len(ea["join"]) + 1, long=len(tech_new) > 420)
             except Exception:
-                d = json.loads(snap)
-                self.store["segs"][uid], self.store["segs"][ub] = d["ea"], d["eb"]
-                self.joins_refresh()
+                self.store["segs"] = segs_before
+                self._abs = abs_before
                 self.undo = undo_before
-                # Склеенный дубль создан этой операцией и ещё не попал в сохранённое состояние.
-                # Исходные дубли не затрагиваются; удаляем только новый артефакт этой склейки.
+                self._takes = takes_before
+                # Удаляем исключительно новый артефакт, созданный этой операцией.
                 if tid:
                     try:
-                        glued = self.take_path(d["ea"]["sid"], tid)
+                        glued = self.take_path(segs_before[uid]["sid"], tid)
                         glued.unlink(missing_ok=True)
                         glued.with_suffix(".json").unlink(missing_ok=True)
                     except OSError:
                         pass
                 raise
-            return dict(uid=uid, take=tid, count=len(ea["join"]) + 1, long=len(tech_new) > 420)
 
     def join_split(self, uid: str) -> dict:
         """Разъединить: последняя присоединённая фраза снова сама по себе, со своей записью и правками; головная
@@ -1180,35 +1178,39 @@ class Studio:
             if any(q["uid"] == uid and q["status"] in ("queued", "running") for q in self.jobs.values()):
                 raise Oops("фраза сейчас озвучивается — дождитесь дубля")
             ub = js[-1]
-            eb = self.store["segs"].get(ub) or {}
-            snap = jd({"a": uid, "ea": ea, "b": ub, "eb": eb})
-            was = (ea.get("jwas") or [{}])[-1]
-            ea["join"], ea["jwas"] = js[:-1], list(ea.get("jwas") or [])[:-1]
-            if not ea["join"]:
-                ea.pop("join")
-                ea.pop("jwas", None)
-            eb.pop("into", None)
-            tail_after = ea.get("after")                   # пауза после соединённой фразы стоит после её последних слов —
-            self._join_restore(ea, was)
-            if tail_after:                                 # значит, при разъединении она остаётся у отделённой фразы
-                eb["after"] = tail_after
-            else:
-                eb.pop("after", None)
-            self.joins_refresh()
+            # joins_refresh, tidy и save могут затронуть не только пару UID.
+            segs_before = json.loads(jd(self.store["segs"]))
+            abs_before = dict(self._abs)
             undo_before = list(self.undo)
-            self.undo.append(("#join", snap, "разъединение фраз"))
-            del self.undo[:-80]
-            self._tidy(uid)
-            self._tidy(ub)
             try:
-                self.save("фразы разъединены", {"uid": uid, "id": self.rows[i]["id"], "freed": self.rows[self.idx_of[ub]]["id"] if ub in self.idx_of else "?"})
-            except Exception:
-                d = json.loads(snap)
-                self.store["segs"][uid], self.store["segs"][ub] = d["ea"], d["eb"]
+                ea = self.store["segs"].get(uid) or {}
+                eb = self.store["segs"].get(ub) or {}
+                was = (ea.get("jwas") or [{}])[-1]
+                ea["join"], ea["jwas"] = js[:-1], list(ea.get("jwas") or [])[:-1]
+                if not ea["join"]:
+                    ea.pop("join")
+                    ea.pop("jwas", None)
+                eb.pop("into", None)
+                tail_after = ea.get("after")
+                self._join_restore(ea, was)
+                if tail_after:
+                    eb["after"] = tail_after
+                else:
+                    eb.pop("after", None)
                 self.joins_refresh()
+                self.undo.append(("#join", jd({"a": uid, "ea": segs_before[uid],
+                                                "b": ub, "eb": segs_before.get(ub, {})}), "разъединение фраз"))
+                del self.undo[:-80]
+                self._tidy(uid)
+                self._tidy(ub)
+                self.save("фразы разъединены", {"uid": uid, "id": self.rows[i]["id"],
+                                                "freed": self.rows[self.idx_of[ub]]["id"] if ub in self.idx_of else "?"})
+                return dict(uid=uid, freed=ub, count=len(ea.get("join") or []) + 1)
+            except Exception:
+                self.store["segs"] = segs_before
+                self._abs = abs_before
                 self.undo = undo_before
                 raise
-            return dict(uid=uid, freed=ub, count=len(ea.get("join") or []) + 1)
 
     # ------------------------------------------------------------------ технический текст и правила
     def sidecar(self, p: Path):
