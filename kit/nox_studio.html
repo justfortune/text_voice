@@ -782,7 +782,8 @@ function drawInsp(){
   for(const t of s.takes) h += takeRow(s, t.tid, takeName(t), (t.src === "import" && t.name ? t.name + ", " : "") + (t.dur ? Number(t.dur).toFixed(1) + " с" : "") + (t.at ? ", " + t.at.slice(11, 16) : "")
                                         + (t.trim ? ", обрезано до " + (t.trim[1] - t.trim[0]).toFixed(1) + " с" : ""), t.chosen, t.why, lk);
   h += '</div>';
-  if(!lk) h += '<div class="tools"><button id="ownRec" title="Ваша запись с компьютера (mp3, wav и другие) станет новым дублем этой фразы. Прежние дубли остаются; запись можно обрезать (U)">Своя запись с компьютера…</button>'
+  if(!lk) h += '<div class="tools"><button id="ownMic" title="Записать выбранную фразу своим голосом через микрофон ПК">Записать с микрофона…</button>'
+             + '<button id="ownRec" title="Ваша запись с компьютера (mp3, wav и другие) станет новым дублем этой фразы. Прежние дубли остаются; запись можно обрезать (U)">Своя запись с компьютера…</button>'
             + (S.part.locked ? "" : '<button id="insAfter" title="Новая фраза сразу после этой: её озвучит движок или вы сами (Insert)">Вставить фразу после этой…</button>')
             + (!S.part.locked && !s.ins && !(s.joined && s.joined.length) && (s.edits || []).length ? '<button id="segReset" title="Только эта фраза снова станет такой, какой её озвучил конвейер: роль и текст как в книге, обычные скорость и паузы, черновая запись. Дубли остаются в списке. Отмена — Ctrl+Z">Сбросить правки фразы</button>' : "") + '</div>';
   if(ownChosen(s)) h += '<div class="note">Звучит ваша запись. Правила чтения, словарь и смена роли её не меняют. «Озвучить заново» сделает дубль движка — запись останется в списке.</div>';
@@ -884,6 +885,7 @@ function bindInsp(s){
   on("#synthAll", "click", synthAll);
   for(const b of document.querySelectorAll('.take [data-trim]')) b.addEventListener("click", () => trimDialog(s.uid, b.dataset.trim));
   on("#ownRec", "click", () => ownRecord(s.uid));
+   on("#ownMic", "click", () => recordOwn(s.uid));
   on("#insAfter", "click", () => insertDialog(s.uid));
   on("#insEdit", "click", () => insertEditDialog(s.uid));
   on("#insDel", "click", () => insertDelete(s.uid));
@@ -1102,6 +1104,66 @@ async function ownRecord(uid, file){
     toast("Ваша запись стала новым дублем фразы № " + s.id + " (" + Number(tk.dur).toFixed(1) + " с)" + (tk.trim ? ". Тишина по краям обрезана" : "") + ". Прежние дубли на месте, исходный файл сохранён в studio\\imports.", "ok", 14000, ["Обрезать…", () => trimDialog(uid, tk.tid)]);
   } catch(e){ fail(e); }
   finally { S.posts--; t.remove(); }
+}
+// ---------------------------------------------------------------- запись собственного голоса непосредственно с микрофона
+let MIC = null;
+async function recordOwn(uid){
+  const s = segOf(uid); if(!s) return;
+  if(s.locked){ toast("Фраза закреплена — сначала снимите закрепление.", "red"); return; }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined"){
+    toast("Запись микрофона недоступна. Откройте студию в актуальном Chrome или Edge.", "red", 9000); return;
+  }
+  if(MIC){ toast("Запись уже открыта — завершите её или отмените.", "red"); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}}); }
+  catch(e){
+    const msg = e && (e.name==="NotAllowedError" || e.name==="SecurityError")
+      ? "Нет разрешения на микрофон. Разрешите доступ сайту 127.0.0.1 в настройках браузера."
+      : e && e.name==="NotFoundError" ? "Микрофон не найден. Проверьте устройство ввода Windows."
+      : "Не удалось открыть микрофон: "+(e && e.message || e);
+    toast(msg,"red",10000); return;
+  }
+  const mime=["audio/webm;codecs=opus","audio/webm"].find(x=>MediaRecorder.isTypeSupported(x)) || "";
+  let rec;
+  try { rec=new MediaRecorder(stream,mime?{mimeType:mime,audioBitsPerSecond:128000}:{audioBitsPerSecond:128000}); }
+  catch(e){stream.getTracks().forEach(t=>t.stop());toast("Браузер не смог создать запись: "+e.message,"red");return;}
+  const chunks=[]; let keep=false; const started=Date.now();
+  MIC={uid,rec,stream,clock:0};
+  rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+  rec.onerror=e=>{const msg=e.error&&e.error.message||"ошибка записи";micRelease();closeDialog();toast("Ошибка микрофона: "+msg,"red",9000);};
+  dialog('<h3>Запись фразы № '+esc(s.id)+'</h3><p style="font:18px/1.55 var(--serif)">'+esc(s.tech)+'</p>'
+    +'<p class="note">Запись выполняется локально. Проверьте уровень микрофона и говорите естественно, с небольшим расстоянием до него. '
+    +'Файл отправится в проект только после нажатия «Остановить и сохранить». Максимум — 3 минуты.</p>'
+    +'<p id="micClock" class="num" style="font-size:24px">00:00</p><p class="note">Идёт запись…</p>',
+    [["Отменить",()=>{keep=false;micCancel();}],["Остановить и сохранить",()=>{keep=true;if(rec.state!=="inactive")rec.stop();},"pri"]]);
+  rec.onstop=async()=>{
+    const elapsed=(Date.now()-started)/1000, blob=new Blob(chunks,{type:rec.mimeType||"audio/webm"});
+    micRelease();
+    if(!keep)return;
+    if(blob.size<1500||elapsed<0.25){toast("Запись слишком короткая или пустая. Повторите.", "red");return;}
+    const ext=(rec.mimeType||"").includes("mp4")?"m4a":"webm";
+    const file=new File([blob],"microphone_"+new Date().toISOString().replace(/[:.]/g,"-")+"."+ext,{type:blob.type,lastModified:Date.now()});
+    await ownRecord(uid,file);
+  };
+  rec.start(500);
+  MIC.clock=setInterval(()=>{
+    if(!MIC||MIC.rec!==rec)return;
+    const sec=Math.floor((Date.now()-started)/1000),el=$("#micClock");
+    if(el)el.textContent=String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0");
+    if(sec>=180&&rec.state!=="inactive"){keep=true;rec.stop();closeDialog();toast("Достигнут предел 3 минуты — сохраняю запись.", "blue",6000);}
+  },250);
+}
+function micRelease(){
+  if(!MIC)return;
+  clearInterval(MIC.clock);
+  MIC.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});
+  MIC=null;
+}
+function micCancel(){
+  if(!MIC)return;
+  const m=MIC;MIC=null;clearInterval(m.clock);
+  m.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});
+  if(m.rec.state!=="inactive"){m.rec.onstop=null;try{m.rec.stop();}catch(e){}}
 }
 const TR = {uid:null, tid:"", dur:0, t0:0, t1:0, v0:0, v1:0, peaks:[], auto:null, next:null, moved:false, drag:null, timer:0, play:null};
 async function trimDialog(uid, tid){
