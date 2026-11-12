@@ -2213,7 +2213,7 @@ class Studio:
                     return uid
                 if uid == "#join":
                     d = json.loads(old)
-                    snap_before = jd({"a": self.store["segs"].get(d["a"]), "b": self.store["segs"].get(d["b"])})
+                    snap_before = jd(self.store["segs"])
                     if any((self.store["segs"].get(d[q]) or {}).get("locked") for q in ("a", "b")):
                         self.undo.append((uid, old, label))
                         raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
@@ -2228,15 +2228,7 @@ class Studio:
                     try:
                         self.save("отмена: " + label, {"uid": d["a"]})
                     except Exception:
-                        cur_a, cur_b = json.loads(snap_before)["a"], json.loads(snap_before)["b"]
-                        if cur_a is None:
-                            self.store["segs"].pop(d["a"], None)
-                        else:
-                            self.store["segs"][d["a"]] = cur_a
-                        if cur_b is None:
-                            self.store["segs"].pop(d["b"], None)
-                        else:
-                            self.store["segs"][d["b"]] = cur_b
+                        self.store["segs"] = json.loads(snap_before)
                         self.joins_refresh()
                         self.undo.append((uid, old, label))
                         raise
@@ -2246,7 +2238,7 @@ class Studio:
                 cur = self.store["segs"].get(uid) or {}
                 if cur.get("locked") and not (old or {}).get("locked"):
                     raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
-                before = jd(cur) if uid in self.store["segs"] else None
+                before = jd(self.store["segs"])
                 try:
                     if old is None:
                         self.store["segs"].pop(uid, None)
@@ -2256,10 +2248,7 @@ class Studio:
                     self.joins_refresh()
                     self.save("отмена: " + label, {"uid": uid})
                 except Exception:
-                    if before is None:
-                        self.store["segs"].pop(uid, None)
-                    else:
-                        self.store["segs"][uid] = json.loads(before)
+                    self.store["segs"] = json.loads(before)
                     self.joins_refresh()
                     self.undo.append((uid, old, label))
                     raise
