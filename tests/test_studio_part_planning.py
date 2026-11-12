@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Cross-layer regression tests for the studio's fallback part planner."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -34,11 +35,16 @@ class SharedPartDurationContractTests(unittest.TestCase):
             {"pause_before_ms": 550, "kind": "text"},
             {"pause_before_ms": 550, "kind": "text"},
         ]
-        s.wavs = [Path("a.wav"), Path("b.wav"), Path("c.wav")]
-        with patch.object(studio, "n", audiobook), \
-             patch.object(audiobook, "load_durations", return_value={}), \
-             patch.object(audiobook, "duration_of", return_value=50.0):
-            planned = s.own_plan(0)
+        with tempfile.TemporaryDirectory() as td:
+            s.wavs = []
+            for name in ("a.wav", "b.wav", "c.wav"):
+                wav = Path(td) / name
+                wav.write_bytes(b"test")
+                s.wavs.append(wav)
+            with patch.object(studio, "n", audiobook), \
+                 patch.object(audiobook, "load_durations", return_value={}), \
+                 patch.object(audiobook, "duration_of", return_value=50.0):
+                planned = s.own_plan(0)
         # At speed 0.8, 2 min final duration needs 96 s source.
         # Two 50-second phrases cross that threshold; TEMPO_G is irrelevant.
         self.assertEqual([(0, 1), (2, 2)], planned)
