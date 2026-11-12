@@ -61,10 +61,11 @@ class PartIndexTests(unittest.TestCase):
                 {"id": 1, "speaker": "narrator", "text": "повтор", "pause_before_ms": 0, "kind": "text"},
                 {"id": 2, "speaker": "narrator", "text": "повтор", "pause_before_ms": 0, "kind": "text"},
             ]
-            with patch.object(n, "PARTS_INDEX", index), patch.object(n, "load_durations", return_value={}), \\
-                 patch.object(n, "wav_for", side_effect=lambda row, roles: root / "same.wav"):
-                with self.assertRaisesRegex(ValueError, "неоднозначные границы"):
-                    n.plan_parts(rows, {}, 10)
+            with patch.object(n, "PARTS_INDEX", index):
+                with patch.object(n, "load_durations", return_value={}):
+                    with patch.object(n, "wav_for", side_effect=lambda row, roles: root / "same.wav"):
+                        with self.assertRaisesRegex(ValueError, "неоднозначные границы"):
+                            n.plan_parts(rows, {}, 10)
 
 
 class LockTests(unittest.TestCase):
