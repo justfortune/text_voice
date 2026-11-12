@@ -611,8 +611,50 @@ def write_wav_atomic(path: Path, data, sr):
     os.replace(tmp, path)
 
 
+def _pid_alive(pid: int):
+    """Проверяет PID без отправки сигналов процессу; None означает, что статус неизвестен."""
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        # На Windows os.kill(pid, 0) НЕ является POSIX-проверкой существования:
+        # ненулевой/неподдерживаемый сигнал может завершить целевой процесс.
+        import ctypes
+        from ctypes import wintypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            # ERROR_INVALID_PARAMETER: такого PID уже нет. Остальные ошибки
+            # (например, ACCESS_DENIED) трактуем консервативно как unknown.
+            return False if error == 87 else None
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return None
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+    except OSError:
+        return None
+
+
 def claim(path: Path) -> bool:
-    """Атомарно занять WAV. Старый lock не перехватывается автоматически: его возраст не доказывает смерть владельца."""
+    """Атомарно занять WAV; неизвестный статус владельца означает отказ от перехвата."""
     lock = path.with_suffix(".lock")
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -630,14 +672,11 @@ def claim(path: Path) -> bool:
             raw = lock.read_text(encoding="ascii").strip()
             if raw:
                 try:
-                    os.kill(int(raw), 0)           # живой PID — lock не трогаем
-                    return False
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    return False                 # процесс есть, но проверить его нельзя
-                except (ValueError, OSError):
-                    return False                 # неизвестный владелец — безопаснее не перехватывать
+                    alive = _pid_alive(int(raw))
+                except (ValueError, OverflowError):
+                    return False                 # неизвестный владелец — не перехватываем
+                if alive is not False:
+                    return False                 # живой или неизвестный PID — lock не трогаем
             stale = lock.with_name(lock.name + f".stale.{os.getpid()}.{time.time_ns()}")
             os.rename(lock, stale)                # атомарно: только один конкурент заберёт старый lock
             try:
