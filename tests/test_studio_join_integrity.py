@@ -159,5 +159,50 @@ class StudioPidSafetyTests(unittest.TestCase):
         self.assertFalse(studio.pid_alive(-1))
 
 
+class JoinSaveRollbackTests(unittest.TestCase):
+    def _studio(self):
+        import threading
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.uids = ["a", "b"]
+        s.idx_of = {"a": 0, "b": 1}
+        s.rows = [{"id": 1}, {"id": 2}]
+        s._abs = {}
+        s.jobs = {}
+        s.undo = [("older", "snapshot", "older change")]
+        s.store = {"segs": {
+            "a": {"sid": "sa", "join": ["b"], "jwas": [{"tech": "before"}], "tech": "joined"},
+            "b": {"sid": "sb", "into": "a"},
+        }}
+        s.joins_refresh = lambda: 0
+        s._tidy = lambda uid: None
+        s.save = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated disk failure"))
+        return s
+
+    def test_split_save_failure_restores_phrase_state_and_undo_history(self):
+        s = self._studio()
+        before = studio.jd(s.store["segs"])
+        undo_before = list(s.undo)
+        with self.assertRaisesRegex(OSError, "simulated disk failure"):
+            s.join_split("a")
+        self.assertEqual(before, studio.jd(s.store["segs"]))
+        self.assertEqual(undo_before, s.undo)
+
+    def test_join_undo_save_failure_restores_state_and_keeps_undo_entry(self):
+        s = self._studio()
+        s.store["segs"] = {"a": {"sid": "sa"}, "b": {"sid": "sb"}}
+        undo_snapshot = studio.jd({
+            "a": "a", "ea": {"sid": "sa", "join": ["b"], "jwas": [{"tech": "before"}]},
+            "b": "b", "eb": {"sid": "sb", "into": "a"},
+        })
+        s.undo = [("#join", undo_snapshot, "split")]
+        before = studio.jd(s.store["segs"])
+        undo_before = list(s.undo)
+        with self.assertRaisesRegex(OSError, "simulated disk failure"):
+            s.undo_last()
+        self.assertEqual(before, studio.jd(s.store["segs"]))
+        self.assertEqual(undo_before, s.undo)
+
+
 if __name__ == "__main__":
     unittest.main()
