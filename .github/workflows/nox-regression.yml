@@ -10,7 +10,12 @@ on:
 
 jobs:
   regression:
-    runs-on: ubuntu-latest
+    name: Regression (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
