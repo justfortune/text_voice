@@ -31,6 +31,55 @@ class ChunkTextTests(unittest.TestCase):
         self.assertEqual([], n.chunk_text("   ", 20))
 
 
+class PartDurationPlanningTests(unittest.TestCase):
+    def _plan(self, speed, frozen=None):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rows = [
+                {"id": i + 1, "pause_before_ms": pause, "kind": "text"}
+                for i, pause in enumerate((0, 0, 1000, 1000))
+            ]
+            wavs = {str(row["id"]): root / (str(row["id"]) + ".wav") for row in rows}
+            for wav in wavs.values():
+                wav.write_bytes(b"wav")
+            index = root / "parts.json"
+            if frozen is not None:
+                index.write_text(json.dumps(frozen), encoding="utf-8")
+            durations = root / "durations.json"
+            with patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", durations), \
+                 patch.object(n, "PAUSE", {"para": 1000}), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \
+                 patch.object(n, "duration_of", return_value=60.0):
+                return n.plan_parts(rows, {}, 2.0, speed=speed)[0]
+
+    def test_faster_export_plans_more_source_audio_for_same_final_duration(self):
+        normal = self._plan(1.0)
+        faster = self._plan(1.25)
+        self.assertEqual(1, normal[0][1])
+        self.assertEqual(2, faster[0][1])
+
+    def test_slower_export_uses_shorter_source_threshold(self):
+        slower = self._plan(0.8)
+        self.assertEqual(1, slower[0][1])
+
+    def test_existing_frozen_boundaries_do_not_move_when_speed_changes(self):
+        frozen = [{
+            "n": 1, "start_id": "1", "end_id": "2",
+            "start": "1", "end": "2",
+        }]
+        self.assertEqual(1, self._plan(1.5, frozen=frozen)[0][1])
+
+    def test_invalid_speed_is_rejected_before_planning(self):
+        import math
+        for speed in (0, -1, float("inf"), float("nan")):
+            with self.subTest(speed=speed):
+                with self.assertRaisesRegex(ValueError, "скорость сборки"):
+                    n.plan_parts([], {}, 2.0, speed=speed)
+
+
 class DurationCacheTests(unittest.TestCase):
     def test_cache_invalidates_when_wav_changes(self):
         fake_sf = types.SimpleNamespace(
