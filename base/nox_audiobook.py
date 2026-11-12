@@ -1202,7 +1202,7 @@ def plan_parts(rows, roles, minutes: float):
         acc += int(r["pause_before_ms"]) / 1000 + duration_of(wav_for(r, roles), cache)
         nxt = rows[i + 1] if i + 1 < len(rows) else None
         boundary_ok = nxt is None or nxt["kind"] == "head" or int(nxt["pause_before_ms"]) >= PAUSE["para"]
-        if acc >= minutes * 60 and boundary_ok:
+        if acc >= target_source_seconds and boundary_ok:
             parts.append((start, i, True))
             start, acc = i + 1, 0.0
     if complete and start < len(rows):
@@ -1215,7 +1215,7 @@ def plan_parts(rows, roles, minutes: float):
 
 def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=False, speed=1.0):
     """Собирает все закрытые части, которых ещё нет в parts/. -> список новых файлов."""
-    parts, ready, complete = plan_parts(rows, roles, minutes)
+    parts, ready, complete = plan_parts(rows, roles, minutes, speed=speed)
     PARTS.mkdir(exist_ok=True)
     new_files = []
     frozen = []
