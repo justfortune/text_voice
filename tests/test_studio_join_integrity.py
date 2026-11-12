@@ -208,20 +208,71 @@ class GlueArtifactRollbackTests(unittest.TestCase):
     def test_metadata_failure_removes_only_new_glue_artifacts(self):
         import tempfile
         import types
-        import numpy as np
+
+        class FakeArray:
+            def __init__(self, values):
+                self.values = list(values)
+                self.rows = None
+
+            def __len__(self):
+                return len(self.values)
+
+            def __getitem__(self, item):
+                return FakeArray(self.values[item]) if isinstance(item, slice) else self.values[item]
+
+            def reshape(self, rows, columns):
+                self.rows = rows
+                return self
+
+            def __gt__(self, other):
+                return [value > other for value in self.values]
+
+        class FakeNumpy:
+            @staticmethod
+            def asarray(value, dtype=None):
+                return value if isinstance(value, FakeArray) else FakeArray(value)
+
+            @staticmethod
+            def square(value):
+                return value
+
+            @staticmethod
+            def mean(value, axis=None):
+                return FakeArray([1.0] * (value.rows or len(value))) if axis == 1 else 1.0
+
+            @staticmethod
+            def sqrt(value):
+                return value
+
+            @staticmethod
+            def percentile(value, percentile):
+                return 1.0
+
+            @staticmethod
+            def nonzero(mask):
+                return ([index for index, enabled in enumerate(mask) if enabled],)
+
+            @staticmethod
+            def zeros(count, dtype=None):
+                return FakeArray([0.0] * count)
+
+            @staticmethod
+            def concatenate(values):
+                return FakeArray([item for value in values for item in value.values])
 
         with tempfile.TemporaryDirectory() as root:
             s = studio.Studio.__new__(studio.Studio)
             s.takes_dir = Path(root)
             s._takes = {}
-            s.read_audio = lambda path: (np.ones(2400, dtype="float32"), 24000)
+            s.read_audio = lambda path: (FakeArray([1.0] * 2400), 24000)
             s.row_text = lambda index: "joined phrase"
             e = {"sid": "sa"}
             fake_soundfile = types.SimpleNamespace(
                 write=lambda path, audio, rate, subtype: Path(path).write_bytes(b"wav")
             )
             with patch.dict(sys.modules, {"soundfile": fake_soundfile}), \
-                 patch.object(studio.n, "NORM_ON", False), \
+                 patch.object(studio, "np", FakeNumpy), \
+                 patch.object(studio, "n", types.SimpleNamespace(NORM_ON=False)), \
                  patch.object(studio, "write_atomic", side_effect=OSError("metadata write failed")):
                 with self.assertRaisesRegex(OSError, "metadata write failed"):
                     s._glue(0, e, {"path": "first"}, {"path": "second"}, "voice", "joined phrase")
@@ -229,8 +280,6 @@ class GlueArtifactRollbackTests(unittest.TestCase):
             take_dir = Path(root) / "sa"
             self.assertFalse(take_dir.exists() and list(take_dir.iterdir()))
             self.assertEqual(1, e["tseq"])
-
-
 
 
 if __name__ == "__main__":
