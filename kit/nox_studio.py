@@ -2214,6 +2214,7 @@ class Studio:
                 if uid == "#join":
                     d = json.loads(old)
                     snap_before = jd(self.store["segs"])
+                    abs_before = jd(self._abs)
                     if any((self.store["segs"].get(d[q]) or {}).get("locked") for q in ("a", "b")):
                         self.undo.append((uid, old, label))
                         raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
@@ -2229,7 +2230,7 @@ class Studio:
                         self.save("отмена: " + label, {"uid": d["a"]})
                     except Exception:
                         self.store["segs"] = json.loads(snap_before)
-                        self.joins_refresh()
+                        self._abs = json.loads(abs_before)
                         self.undo.append((uid, old, label))
                         raise
                     return d["a"]
@@ -2239,6 +2240,7 @@ class Studio:
                 if cur.get("locked") and not (old or {}).get("locked"):
                     raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
                 before = jd(self.store["segs"])
+                abs_before = jd(self._abs)
                 try:
                     if old is None:
                         self.store["segs"].pop(uid, None)
@@ -2249,7 +2251,7 @@ class Studio:
                     self.save("отмена: " + label, {"uid": uid})
                 except Exception:
                     self.store["segs"] = json.loads(before)
-                    self.joins_refresh()
+                    self._abs = json.loads(abs_before)
                     self.undo.append((uid, old, label))
                     raise
                 return uid
