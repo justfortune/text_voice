@@ -1128,9 +1128,26 @@ class Studio:
                 self.store["segs"][uid], self.store["segs"][ub] = d["ea"], d["eb"]
                 self.joins_refresh()
                 raise
+            undo_before = list(self.undo)
             self.undo.append(("#join", snap, "соединение фраз"))
             del self.undo[:-80]
-            self.save("фразы соединены", {"uid": uid, "id": ra["id"], "with": rb["id"], "take": tid})
+            try:
+                self.save("фразы соединены", {"uid": uid, "id": ra["id"], "with": rb["id"], "take": tid})
+            except Exception:
+                d = json.loads(snap)
+                self.store["segs"][uid], self.store["segs"][ub] = d["ea"], d["eb"]
+                self.joins_refresh()
+                self.undo = undo_before
+                # Склеенный дубль создан этой операцией и ещё не попал в сохранённое состояние.
+                # Исходные дубли не затрагиваются; удаляем только новый артефакт этой склейки.
+                if tid:
+                    try:
+                        glued = self.take_path(d["ea"]["sid"], tid)
+                        glued.unlink(missing_ok=True)
+                        glued.with_suffix(".json").unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                raise
             return dict(uid=uid, take=tid, count=len(ea["join"]) + 1, long=len(tech_new) > 420)
 
     def join_split(self, uid: str) -> dict:
@@ -1167,11 +1184,19 @@ class Studio:
             else:
                 eb.pop("after", None)
             self.joins_refresh()
+            undo_before = list(self.undo)
             self.undo.append(("#join", snap, "разъединение фраз"))
             del self.undo[:-80]
             self._tidy(uid)
             self._tidy(ub)
-            self.save("фразы разъединены", {"uid": uid, "id": self.rows[i]["id"], "freed": self.rows[self.idx_of[ub]]["id"] if ub in self.idx_of else "?"})
+            try:
+                self.save("фразы разъединены", {"uid": uid, "id": self.rows[i]["id"], "freed": self.rows[self.idx_of[ub]]["id"] if ub in self.idx_of else "?"})
+            except Exception:
+                d = json.loads(snap)
+                self.store["segs"][uid], self.store["segs"][ub] = d["ea"], d["eb"]
+                self.joins_refresh()
+                self.undo = undo_before
+                raise
             return dict(uid=uid, freed=ub, count=len(ea.get("join") or []) + 1)
 
     # ------------------------------------------------------------------ технический текст и правила
@@ -2156,6 +2181,7 @@ class Studio:
                     return uid
                 if uid == "#join":
                     d = json.loads(old)
+                    snap_before = jd({"a": self.store["segs"].get(d["a"]), "b": self.store["segs"].get(d["b"])})
                     if any((self.store["segs"].get(d[q]) or {}).get("locked") for q in ("a", "b")):
                         self.undo.append((uid, old, label))
                         raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
@@ -2167,7 +2193,21 @@ class Studio:
                             d[w]["tseq"] = max(int(d[w].get("tseq", 0)), int(cur.get("tseq", 0)))       # дубли не теряем
                             self.store["segs"][d[q]] = d[w]
                     self.joins_refresh()
-                    self.save("отмена: " + label, {"uid": d["a"]})
+                    try:
+                        self.save("отмена: " + label, {"uid": d["a"]})
+                    except Exception:
+                        cur_a, cur_b = json.loads(snap_before)["a"], json.loads(snap_before)["b"]
+                        if cur_a is None:
+                            self.store["segs"].pop(d["a"], None)
+                        else:
+                            self.store["segs"][d["a"]] = cur_a
+                        if cur_b is None:
+                            self.store["segs"].pop(d["b"], None)
+                        else:
+                            self.store["segs"][d["b"]] = cur_b
+                        self.joins_refresh()
+                        self.undo.append((uid, old, label))
+                        raise
                     return d["a"]
                 if uid not in self.idx_of:
                     continue
