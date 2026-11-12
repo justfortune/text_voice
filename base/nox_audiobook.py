@@ -1155,9 +1155,8 @@ def build(args):
 # 5. PARTS / WATCH — части по ~N минут из уже готового начала книги; watch собирает их по мере озвучки и копирует
 # ----------------------------------------------------------------------------------------------------------------------
 
-def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
-    """-> (parts, ready, complete). Существующие границы частей остаются замороженными.
-    Новая граница рассчитывается по длительности исходного звука с учётом скорости финального atempo."""
+def part_source_seconds(minutes: float, speed: float = 1.0) -> float:
+    """Исходная длительность аудио, соответствующая заданной длительности после atempo."""
     try:
         minutes, speed = float(minutes), float(speed)
     except (TypeError, ValueError):
@@ -1166,7 +1165,13 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
         raise ValueError("длительность части должна быть положительным конечным числом минут")
     if not math.isfinite(speed) or speed <= 0:
         raise ValueError("скорость сборки должна быть положительным конечным числом")
-    target_source_seconds = minutes * 60.0 * speed
+    return minutes * 60.0 * speed
+
+
+def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
+    """-> (parts, ready, complete). Существующие границы частей остаются замороженными.
+    Новая граница рассчитывается по длительности исходного звука с учётом скорости финального atempo."""
+    target_source_seconds = part_source_seconds(minutes, speed)
     cache = load_durations()
     keys = [wav_for(r, roles).stem for r in rows]
     # WAV cache keys may repeat by design; book positions must instead use unique row IDs.
