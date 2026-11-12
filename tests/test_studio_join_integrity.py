@@ -448,5 +448,30 @@ class GlueArtifactRollbackTests(unittest.TestCase):
             self.assertEqual(1, e["tseq"])
 
 
+class AtomicWriteCleanupTests(unittest.TestCase):
+    def test_failed_replace_preserves_previous_file_and_removes_own_temp(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / "edits.json"
+            target.write_bytes(b"previous valid state")
+            with patch.object(studio.os, "replace", side_effect=OSError("disk busy")), \
+                 patch.object(studio.time, "sleep", return_value=None):
+                with self.assertRaisesRegex(OSError, "disk busy"):
+                    studio.write_atomic(target, b"new state")
+            self.assertEqual(b"previous valid state", target.read_bytes())
+            self.assertFalse(target.with_name(target.name + ".tmp").exists())
+
+    def test_successful_atomic_write_replaces_file_and_leaves_no_temp(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / "edits.json"
+            target.write_bytes(b"previous valid state")
+            studio.write_atomic(target, b"new state")
+            self.assertEqual(b"new state", target.read_bytes())
+            self.assertFalse(target.with_name(target.name + ".tmp").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
