@@ -2157,10 +2157,16 @@ class Studio:
                 uid, old, label = self.undo.pop()
                 if uid == "#cues":                             # звуки и громкости дорожек — одним снимком
                     snap = json.loads(old)
+                    before = jd({key: self.store.get(key) for key in ("cues", "cue_seen", "sound_map", "mix", "kit_off")})
                     self.store["cues"], self.store["cue_seen"], self.store["sound_map"], self.store["mix"] = snap[:4]
                     if len(snap) > 4:
                         self.store["kit_off"] = snap[4]
-                    self.save("отмена: " + label)
+                    try:
+                        self.save("отмена: " + label)
+                    except Exception:
+                        self.store.update(json.loads(before))
+                        self.undo.append((uid, old, label))
+                        raise
                     return uid
                 if uid == "#ins":                              # вставка добавлена / удалена / переписана
                     d = json.loads(old)
@@ -2170,6 +2176,12 @@ class Studio:
                             continue
                         if (self.store["segs"].get(x["id"]) or {}).get("locked"):
                             raise Oops("вставка закреплена — снимите закрепление, чтобы отменить её")
+                    elif d["op"] == "del" and x is None:
+                        pass
+                    elif d["op"] != "del" and x is None:
+                        continue
+                    before = jd({"ins": self.store["ins"], "segs": self.store["segs"]})
+                    if d["op"] == "add":
                         self.store["ins"].remove(x)
                         self.store["segs"].pop(x["id"], None)
                     elif d["op"] == "del":
@@ -2178,8 +2190,6 @@ class Studio:
                             if d.get("e"):
                                 self.store["segs"][d["ins"]["id"]] = d["e"]
                     else:
-                        if x is None:
-                            continue
                         x["text"] = d["text"]
                         if d.get("tech"):
                             x["tech"] = d["tech"]
@@ -2187,7 +2197,13 @@ class Studio:
                             x.pop("tech", None)
                         if d.get("etech") is not None:
                             self.E(x["id"], create=True)["tech"] = d["etech"]
-                    self.save("отмена: " + label)
+                    try:
+                        self.save("отмена: " + label)
+                    except Exception:
+                        state = json.loads(before)
+                        self.store["ins"], self.store["segs"] = state["ins"], state["segs"]
+                        self.undo.append((uid, old, label))
+                        raise
                     self.rows_changed()
                     return uid
                 if uid == "#join":
