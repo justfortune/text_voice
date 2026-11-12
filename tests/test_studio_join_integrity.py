@@ -188,6 +188,36 @@ class JoinSaveRollbackTests(unittest.TestCase):
         self.assertEqual(before, studio.jd(s.store["segs"]))
         self.assertEqual(undo_before, s.undo)
 
+    def test_join_undo_refresh_failure_restores_state_and_keeps_undo_entry(self):
+        s = self._studio()
+        s.store["segs"] = {
+            "a": {"sid": "sa"},
+            "b": {"sid": "sb"},
+            "other": {"sid": "sc", "join": ["missing"]},
+        }
+        undo_snapshot = studio.jd({
+            "a": "a", "ea": {"sid": "sa", "join": ["b"], "jwas": [{"tech": "before"}]},
+            "b": "b", "eb": {"sid": "sb", "into": "a"},
+        })
+        s.undo = [("#join", undo_snapshot, "split")]
+        before = studio.jd(s.store["segs"])
+        undo_before = list(s.undo)
+        calls = [0]
+
+        def refresh_then_fail():
+            calls[0] += 1
+            if calls[0] == 1:
+                s.store["segs"]["other"]["cleaned"] = True
+                raise OSError("simulated refresh failure")
+            return 0
+
+        s.joins_refresh = refresh_then_fail
+        with self.assertRaisesRegex(OSError, "simulated refresh failure"):
+            s.undo_last()
+        self.assertEqual(before, studio.jd(s.store["segs"]))
+        self.assertEqual(undo_before, s.undo)
+        self.assertEqual(2, calls[0])
+
     def test_join_undo_save_failure_restores_state_and_keeps_undo_entry(self):
         s = self._studio()
         s.store["segs"] = {"a": {"sid": "sa"}, "b": {"sid": "sb"}}
