@@ -188,6 +188,89 @@ class JoinSaveRollbackTests(unittest.TestCase):
         self.assertEqual(before, studio.jd(s.store["segs"]))
         self.assertEqual(undo_before, s.undo)
 
+    def test_split_refresh_failure_restores_all_state_without_retrying_refresh(self):
+        s = self._studio()
+        s.store["segs"]["other"] = {"sid": "sc", "join": ["missing"]}
+        before = studio.jd(s.store["segs"])
+        abs_before = dict(s._abs)
+        undo_before = list(s.undo)
+        calls = [0]
+
+        def refresh_then_fail():
+            calls[0] += 1
+            s.store["segs"]["other"]["cleaned"] = True
+            s._abs["corrupt"] = 99
+            raise OSError("simulated refresh failure")
+
+        s.joins_refresh = refresh_then_fail
+        with self.assertRaisesRegex(OSError, "simulated refresh failure"):
+            s.join_split("a")
+        self.assertEqual(before, studio.jd(s.store["segs"]))
+        self.assertEqual(abs_before, s._abs)
+        self.assertEqual(undo_before, s.undo)
+        self.assertEqual(1, calls[0])
+
+    def test_join_refresh_failure_restores_all_state(self):
+        s = self._join_operation_fixture()
+        before = studio.jd(s.store["segs"])
+        abs_before = dict(s._abs)
+        undo_before = list(s.undo)
+        takes_before = dict(s._takes)
+
+        def refresh_then_fail():
+            s.store["segs"]["other"]["cleaned"] = True
+            s._abs["corrupt"] = 99
+            raise OSError("simulated refresh failure")
+
+        s.joins_refresh = refresh_then_fail
+        with self.assertRaisesRegex(OSError, "simulated refresh failure"):
+            s.join_next("a")
+        self.assertEqual(before, studio.jd(s.store["segs"]))
+        self.assertEqual(abs_before, s._abs)
+        self.assertEqual(undo_before, s.undo)
+        self.assertEqual(takes_before, s._takes)
+
+    def test_join_save_failure_restores_all_state(self):
+        s = self._join_operation_fixture()
+        before = studio.jd(s.store["segs"])
+        abs_before = dict(s._abs)
+        undo_before = list(s.undo)
+        takes_before = dict(s._takes)
+        s.save = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated disk failure"))
+        with self.assertRaisesRegex(OSError, "simulated disk failure"):
+            s.join_next("a")
+        self.assertEqual(before, studio.jd(s.store["segs"]))
+        self.assertEqual(abs_before, s._abs)
+        self.assertEqual(undo_before, s.undo)
+        self.assertEqual(takes_before, s._takes)
+
+    def _join_operation_fixture(self):
+        import threading
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.idx_of = {"a": 0, "b": 1}
+        s.uids = ["a", "b"]
+        s.rows = [{"id": 1, "kind": "text"}, {"id": 2, "kind": "text"}]
+        s._abs = {}
+        s.jobs = {}
+        s.undo = [("older", "snapshot", "older change")]
+        s._takes = {"cache": "preserve"}
+        s.store = {"parts": [{}], "segs": {
+            "a": {"sid": "sa", "tech": "before"},
+            "b": {"sid": "sb"},
+            "other": {"sid": "sc", "join": ["missing"]},
+        }}
+        s.part_of = lambda index: 1
+        s.plan = lambda: [{"b": 1}]
+        s.chain = lambda index: [0]
+        s.E = lambda key, create=False: s.store["segs"].setdefault(key, {"sid": "s" + key})
+        s.eff = lambda index: {"role": "narrator", "tech": "phrase"}
+        s.src = lambda index: {"path": None, "tech": None, "imp": False}
+        s.auto_tech = lambda index: ("phrase phrase", None)
+        s.joins_refresh = lambda: 0
+        s.save = lambda *args, **kwargs: None
+        return s
+
     def test_join_undo_refresh_failure_restores_state_and_keeps_undo_entry(self):
         s = self._studio()
         s.store["segs"] = {
