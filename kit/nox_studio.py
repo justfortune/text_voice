@@ -236,9 +236,11 @@ def write_atomic(path: Path, data):
     """Запись через временный файл: при сбое на диске остаётся прежняя версия. Антивирус может держать файл — 5 попыток."""
     tmp = path.with_name(path.name + ".tmp")
     b = data.encode("utf-8") if isinstance(data, str) else data
+    created_tmp = False
     for k in range(5):
         try:
             with open(tmp, "wb") as f:
+                created_tmp = True
                 f.write(b)
                 f.flush()
                 try:
@@ -249,6 +251,13 @@ def write_atomic(path: Path, data):
             return
         except OSError:
             if k == 4:
+                # Не оставляем собственный незавершённый файл после окончательного сбоя.
+                # Старый целевой файл не трогаем; ошибку очистки не подменяем исходной.
+                if created_tmp:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 raise
             time.sleep(0.2 * (k + 1))
 
