@@ -1051,12 +1051,23 @@ class Studio:
         dst = self.take_path(e["sid"], tid)
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_name(dst.stem + ".tmp.wav")
-        sf.write(str(tmp), x, sra, subtype="PCM_16")
-        os.replace(tmp, dst)
-        write_atomic(dst.with_suffix(".json"), jd(dict(
-            tid=tid, src="glue", created=now(), role=role, tech=tech, raw=self.row_text(i), basis="tech",
-            dur=round(len(x) / sra, 3), why=[], cut=round(len(xa) / sra, 3), cover=list(e.get("join") or []),
-            **({"vsig": vsig} if vsig else {}))))
+        meta = dst.with_suffix(".json")
+        try:
+            sf.write(str(tmp), x, sra, subtype="PCM_16")
+            os.replace(tmp, dst)
+            write_atomic(meta, jd(dict(
+                tid=tid, src="glue", created=now(), role=role, tech=tech, raw=self.row_text(i), basis="tech",
+                dur=round(len(x) / sra, 3), why=[], cut=round(len(xa) / sra, 3), cover=list(e.get("join") or []),
+                **({"vsig": vsig} if vsig else {}))))
+        except Exception:
+            # _glue owns this fresh ID; do not leave a WAV without its metadata if
+            # the second half of the artifact transaction fails.
+            for artifact in (tmp, dst, meta):
+                try:
+                    artifact.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
         self._takes.pop(e["sid"], None)
         return tid
 
