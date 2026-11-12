@@ -220,6 +220,8 @@ class GeneralUndoSaveRollbackTests(unittest.TestCase):
     def test_regular_phrase_undo_restores_state_and_history_on_save_failure(self):
         s = self._base()
         old = {"sid": "sa", "tech": "previous"}
+        s.store["segs"]["b"] = {"sid": "sb", "join": ["missing"]}
+        s.joins_refresh = lambda: s.store["segs"]["b"].update(cleaned=True) or 0
         s.undo = [("a", old, "edit")]
         before = studio.jd(s.store["segs"])
         history = list(s.undo)
