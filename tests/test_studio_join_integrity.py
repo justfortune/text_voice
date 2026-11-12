@@ -204,6 +204,56 @@ class JoinSaveRollbackTests(unittest.TestCase):
         self.assertEqual(undo_before, s.undo)
 
 
+class GeneralUndoSaveRollbackTests(unittest.TestCase):
+    def _base(self):
+        import threading
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.idx_of = {"a": 0}
+        s.store = {"segs": {"a": {"sid": "sa", "tech": "current"}}}
+        s.undo = []
+        s.joins_refresh = lambda: 0
+        s.rows_changed = lambda: None
+        s.save = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated disk failure"))
+        return s
+
+    def test_regular_phrase_undo_restores_state_and_history_on_save_failure(self):
+        s = self._base()
+        old = {"sid": "sa", "tech": "previous"}
+        s.undo = [("a", old, "edit")]
+        before = studio.jd(s.store["segs"])
+        history = list(s.undo)
+        with self.assertRaisesRegex(OSError, "simulated disk failure"):
+            s.undo_last()
+        self.assertEqual(before, studio.jd(s.store["segs"]))
+        self.assertEqual(history, s.undo)
+
+    def test_cue_undo_restores_all_keys_and_history_on_save_failure(self):
+        s = self._base()
+        s.store.update({"cues": [{"id": "current"}], "mix": {"gain": 0.5}})
+        previous = [[{"id": "previous"}], [], {}, {"gain": 1.0}]
+        s.undo = [("#cues", studio.jd(previous), "cue edit")]
+        before = studio.jd(s.store)
+        history = list(s.undo)
+        with self.assertRaisesRegex(OSError, "simulated disk failure"):
+            s.undo_last()
+        self.assertEqual(before, studio.jd(s.store))
+        self.assertEqual(history, s.undo)
+
+    def test_insert_undo_restores_state_and_history_on_save_failure(self):
+        s = self._base()
+        s.store["ins"] = []
+        inserted = {"id": "ins-1", "text": "inserted"}
+        s.ins_rec = lambda _id: None
+        s.undo = [("#ins", studio.jd({"op": "del", "id": "ins-1", "ins": inserted}), "delete insert")]
+        before = studio.jd({"ins": s.store["ins"], "segs": s.store["segs"]})
+        history = list(s.undo)
+        with self.assertRaisesRegex(OSError, "simulated disk failure"):
+            s.undo_last()
+        self.assertEqual(before, studio.jd({"ins": s.store["ins"], "segs": s.store["segs"]}))
+        self.assertEqual(history, s.undo)
+
+
 class GlueArtifactRollbackTests(unittest.TestCase):
     def test_metadata_failure_removes_only_new_glue_artifacts(self):
         import tempfile
