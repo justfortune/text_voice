@@ -29,7 +29,7 @@ class StudioFrontendTests(unittest.TestCase):
             p = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
             self.assertEqual(0, p.returncode, p.stdout + p.stderr)
 
-    def test_microphone_recording_uses_browser_capture_and_existing_take_pipeline(self):
+    def test_microphone_capture_uses_existing_take_pipeline(self):
         for token in (
             "navigator.mediaDevices.getUserMedia",
             "new MediaRecorder",
@@ -37,26 +37,35 @@ class StudioFrontendTests(unittest.TestCase):
             "rec.stop()",
             "micCancel()",
             "await ownRecord(uid,file)",
-            'const SND_RE = /\.(wav|webm|mp3',
-            'on("#ownMic", "click", () => recordOwn(s.uid, "phrase"))',
+            r"const SND_RE = /\.(wav|webm|mp3",
+            'on("#ownMic", "click", () => recordOwn(s.uid))',
         ):
             self.assertIn(token, self.html)
 
-    def test_paragraph_recording_is_explicit_and_rolls_back_partial_join(self):
+    def test_microphone_has_level_meter_and_preview_before_upload(self):
         for token in (
-            'scope === "para"',
-            'api("/api/join",{uid:headUid})',
-            'api("/api/unjoin",{uid:headUid})',
-            "Не удалось автоматически отменить соединение абзаца",
-            "Исходные записи фраз сохранены",
+            "createMediaStreamSource(stream)",
+            "getByteTimeDomainData(data)",
+            'id="micMeter"',
+            'id="micLevel"',
+            "Прослушайте запись",
+            "micReviewClear()",
+            "Сохранить дубль",
+            "Перезаписать",
         ):
             self.assertIn(token, self.html)
+        self.assertLess(self.html.index("Прослушайте запись"), self.html.index("await ownRecord(uid,file)"))
 
     def test_microphone_dialog_has_bounded_duration_and_cancel_path(self):
         self.assertIn("sec>=180", self.html)
         self.assertIn("Запись микрофона отменена", self.html)
         self.assertIn("NotAllowedError", self.html)
         self.assertIn("NotFoundError", self.html)
+        self.assertIn("audioCtx.close()", self.html)
+
+    def test_paragraph_recording_is_not_exposed_until_transactional_backend_exists(self):
+        self.assertNotIn('recordOwn(s.uid, "para")', self.html)
+        self.assertNotIn("ownParagraphRecord(", self.html)
 
 
 if __name__ == "__main__":
