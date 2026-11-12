@@ -1105,8 +1105,10 @@ class Studio:
             undo_before = list(self.undo)
             takes_before = dict(self._takes)
             tid = None
+            glue_sid = None
             try:
                 ea, eb = self.E(uid, create=True), self.E(ub, create=True)
+                glue_sid = ea["sid"]
                 if ea.get("locked") or eb.get("locked"):
                     raise Oops("фраза закреплена — сначала снимите закрепление")
                 efa, efb, sca, scb = self.eff(i), self.eff(j), self.src(i), self.src(j)
@@ -1139,8 +1141,7 @@ class Studio:
                         vs = self.vsig_now(efa["role"])
                     tid = self._glue(i, ea, sca, scb, efa["role"], spoken, "" if vs == "nov" else vs)
                     ea["take"] = tid
-                self.undo.append(("#join", jd({"a": uid, "ea": segs_before.get(uid, {}),
-                                                "b": ub, "eb": segs_before.get(ub, {})}), "соединение фраз"))
+                self.undo.append(("#join", jd({"a": uid, "ea": was_a, "b": ub, "eb": was_b}), "соединение фраз"))
                 del self.undo[:-80]
                 self.save("фразы соединены", {"uid": uid, "id": ra["id"], "with": rb["id"], "take": tid})
                 return dict(uid=uid, take=tid, count=len(ea["join"]) + 1, long=len(tech_new) > 420)
@@ -1152,7 +1153,7 @@ class Studio:
                 # Удаляем исключительно новый артефакт, созданный этой операцией.
                 if tid:
                     try:
-                        glued = self.take_path(segs_before[uid]["sid"], tid)
+                        glued = self.take_path(glue_sid, tid)
                         glued.unlink(missing_ok=True)
                         glued.with_suffix(".json").unlink(missing_ok=True)
                     except OSError:
