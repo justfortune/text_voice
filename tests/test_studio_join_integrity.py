@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """Pure state-integrity tests for the studio's existing phrase-chain model."""
+import ctypes
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,6 +77,65 @@ class PhraseChainIntegrityTests(unittest.TestCase):
         self.assertEqual(0, s.joins_refresh())
         self.assertEqual([0], s.chain(0))
         self.assertEqual([1], s.chain(1))
+
+
+
+class StudioPidSafetyTests(unittest.TestCase):
+    def _windows_api(self, open_handle=1234, exit_code=259, exit_ok=1):
+        class ApiCall:
+            def __init__(self, fn):
+                self.fn = fn
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self.fn(*args)
+
+        closed = []
+        def get_exit_code(handle, pointer):
+            if exit_ok:
+                pointer._obj.value = exit_code
+            return exit_ok
+
+        kernel32 = type("Kernel32", (), {})()
+        kernel32.OpenProcess = ApiCall(lambda *args: open_handle)
+        kernel32.GetExitCodeProcess = ApiCall(get_exit_code)
+        kernel32.CloseHandle = ApiCall(lambda handle: closed.append(handle) or 1)
+        return kernel32, closed
+
+    def test_windows_live_and_exited_processes_are_distinguished(self):
+        for exit_code, expected in ((259, True), (0, False)):
+            with self.subTest(exit_code=exit_code):
+                kernel32, closed = self._windows_api(exit_code=exit_code)
+                with patch.object(studio.os, "name", "nt"), \\
+                     patch.object(ctypes, "WinDLL", return_value=kernel32, create=True):
+                    self.assertIs(expected, studio.pid_alive(123))
+                self.assertEqual([1234], closed)
+
+    def test_windows_access_denied_is_not_mistaken_for_dead_process(self):
+        kernel32, _ = self._windows_api(open_handle=0)
+        with patch.object(studio.os, "name", "nt"), \\
+             patch.object(ctypes, "WinDLL", return_value=kernel32, create=True), \\
+             patch.object(ctypes, "get_last_error", return_value=5, create=True):
+            self.assertTrue(studio.pid_alive(123))
+
+    def test_windows_missing_pid_is_confirmed_only_by_invalid_parameter(self):
+        kernel32, _ = self._windows_api(open_handle=0)
+        with patch.object(studio.os, "name", "nt"), \\
+             patch.object(ctypes, "WinDLL", return_value=kernel32, create=True), \\
+             patch.object(ctypes, "get_last_error", return_value=87, create=True):
+            self.assertFalse(studio.pid_alive(123))
+
+    def test_windows_exit_code_query_failure_is_conservative(self):
+        kernel32, closed = self._windows_api(exit_ok=0)
+        with patch.object(studio.os, "name", "nt"), \\
+             patch.object(ctypes, "WinDLL", return_value=kernel32, create=True):
+            self.assertTrue(studio.pid_alive(123))
+        self.assertEqual([1234], closed)
+
+    def test_non_positive_pid_is_not_alive(self):
+        self.assertFalse(studio.pid_alive(0))
+        self.assertFalse(studio.pid_alive(-1))
 
 
 if __name__ == "__main__":
