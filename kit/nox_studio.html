@@ -1106,24 +1106,27 @@ async function ownRecord(uid, file){
   finally { S.posts--; t.remove(); }
 }
 // ---------------------------------------------------------------- запись собственного голоса непосредственно с микрофона
-let MIC = null, MIC_REVIEW_URL = "";
+let MIC = null, MIC_REVIEW_URL = "", MIC_PENDING = false;
 async function recordOwn(uid){
   const s = segOf(uid); if(!s) return;
   if(s.locked){ toast("Фраза закреплена — сначала снимите закрепление.", "red"); return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined"){
     toast("Запись микрофона недоступна. Откройте студию в актуальном Chrome или Edge.", "red", 9000); return;
   }
-  if(MIC){ toast("Запись уже открыта — завершите её или отмените.", "red"); return; }
+  if(MIC || MIC_PENDING){ toast("Запись уже открыта или запрашивается — завершите её или дождитесь разрешения.", "red"); return; }
   let stream;
+  MIC_PENDING = true;
   try {
     stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
   } catch(e){
+    MIC_PENDING = false;
     const msg = e && (e.name==="NotAllowedError" || e.name==="SecurityError")
       ? "Нет разрешения на микрофон. Разрешите доступ локальной студии в настройках браузера."
       : e && e.name==="NotFoundError" ? "Микрофон не найден. Проверьте устройство ввода Windows."
       : "Не удалось открыть микрофон: "+(e && e.message || e);
     toast(msg,"red",10000); return;
   }
+  MIC_PENDING = false;
   const mime=["audio/webm;codecs=opus","audio/webm"].find(x=>MediaRecorder.isTypeSupported(x)) || "";
   let rec;
   try { rec=new MediaRecorder(stream,mime?{mimeType:mime,audioBitsPerSecond:128000}:{audioBitsPerSecond:128000}); }
