@@ -621,8 +621,37 @@ def claim(path: Path) -> bool:
             os.close(fd)
         return True
     except FileExistsError:
-        # Fail closed: автоматическое touch()/перехватывание могло дать двум воркерам один WAV.
-        return False
+        # Перехватываем только доказанно устаревший lock: PID умер либо это старый lock без PID.
+        try:
+            st = lock.stat()
+            if path.exists() or time.time() - st.st_mtime <= LOCK_STALE_SEC:
+                return False
+            raw = lock.read_text(encoding="ascii").strip()
+            if raw:
+                try:
+                    os.kill(int(raw), 0)           # живой PID — lock не трогаем
+                    return False
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    return False                 # процесс есть, но проверить его нельзя
+                except (ValueError, OSError):
+                    return False                 # неизвестный владелец — безопаснее не перехватывать
+            stale = lock.with_name(lock.name + f".stale.{os.getpid()}.{time.time_ns()}")
+            os.rename(lock, stale)                # атомарно: только один конкурент заберёт старый lock
+            try:
+                stale.unlink(missing_ok=True)
+            finally:
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    os.write(fd, str(os.getpid()).encode("ascii"))
+                finally:
+                    os.close(fd)
+            return True
+        except FileExistsError:
+            return False
+        except OSError:
+            return False
 
 
 def release(path: Path):
