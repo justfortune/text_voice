@@ -2157,14 +2157,19 @@ class Studio:
                 uid, old, label = self.undo.pop()
                 if uid == "#cues":                             # звуки и громкости дорожек — одним снимком
                     snap = json.loads(old)
-                    before = jd({key: self.store.get(key) for key in ("cues", "cue_seen", "sound_map", "mix", "kit_off")})
+                    before = jd({key: {"present": key in self.store, "value": self.store.get(key)}
+                                 for key in ("cues", "cue_seen", "sound_map", "mix", "kit_off")})
                     self.store["cues"], self.store["cue_seen"], self.store["sound_map"], self.store["mix"] = snap[:4]
                     if len(snap) > 4:
                         self.store["kit_off"] = snap[4]
                     try:
                         self.save("отмена: " + label)
                     except Exception:
-                        self.store.update(json.loads(before))
+                        for key, item in json.loads(before).items():
+                            if item["present"]:
+                                self.store[key] = item["value"]
+                            else:
+                                self.store.pop(key, None)
                         self.undo.append((uid, old, label))
                         raise
                     return uid
@@ -2241,13 +2246,23 @@ class Studio:
                 cur = self.store["segs"].get(uid) or {}
                 if cur.get("locked") and not (old or {}).get("locked"):
                     raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
-                if old is None:
-                    self.store["segs"].pop(uid, None)
-                else:
-                    old["tseq"] = max(int(old.get("tseq", 0)), int(cur.get("tseq", 0)))   # дубли не теряем
-                    self.store["segs"][uid] = old
-                self.joins_refresh()
-                self.save("отмена: " + label, {"uid": uid})
+                before = jd(cur) if uid in self.store["segs"] else None
+                try:
+                    if old is None:
+                        self.store["segs"].pop(uid, None)
+                    else:
+                        old["tseq"] = max(int(old.get("tseq", 0)), int(cur.get("tseq", 0)))   # дубли не теряем
+                        self.store["segs"][uid] = old
+                    self.joins_refresh()
+                    self.save("отмена: " + label, {"uid": uid})
+                except Exception:
+                    if before is None:
+                        self.store["segs"].pop(uid, None)
+                    else:
+                        self.store["segs"][uid] = json.loads(before)
+                    self.joins_refresh()
+                    self.undo.append((uid, old, label))
+                    raise
                 return uid
             raise Oops("отменять нечего")
 
