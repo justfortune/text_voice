@@ -44,6 +44,12 @@ class StudioFrontendTests(unittest.TestCase):
         ):
             self.assertIn(token, self.html)
 
+    def test_microphone_permission_request_cannot_be_started_concurrently(self):
+        self.assertIn('let MIC = null, MIC_REVIEW_URL = "", MIC_PENDING = false;', self.html)
+        self.assertIn("if(MIC || MIC_PENDING)", self.html)
+        self.assertIn("MIC_PENDING = true;\\n  try {\\n    stream = await navigator.mediaDevices.getUserMedia", self.html)
+        self.assertIn("MIC_PENDING = false;\\n  const mime=", self.html)
+
     def test_microphone_has_level_meter_and_preview_before_upload(self):
         for token in (
             "createMediaStreamSource(stream)",
