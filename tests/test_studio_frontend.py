@@ -33,7 +33,9 @@ class StudioFrontendTests(unittest.TestCase):
         for token in (
             "navigator.mediaDevices.getUserMedia",
             "new MediaRecorder",
-            "rec.start(500)",
+            "try { rec.start(500); }",
+            "Не удалось начать запись",
+            "micRelease(); closeDialog();",
             "rec.stop()",
             "micCancel()",
             "await ownRecord(uid,file)",
