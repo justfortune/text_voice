@@ -1154,9 +1154,18 @@ def build(args):
 # 5. PARTS / WATCH — части по ~N минут из уже готового начала книги; watch собирает их по мере озвучки и копирует
 # ----------------------------------------------------------------------------------------------------------------------
 
-def plan_parts(rows, roles, minutes: float):
-    """-> (parts, complete). parts: список (start_idx, end_idx_incl, closed). Границы уже собранных частей
-    заморожены в work/parts.json (по хешам сегментов), чтобы номера частей не «ехали» между запусками."""
+def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
+    """-> (parts, ready, complete). Существующие границы частей остаются замороженными.
+    Новая граница рассчитывается по длительности исходного звука с учётом скорости финального atempo."""
+    try:
+        minutes, speed = float(minutes), float(speed)
+    except (TypeError, ValueError):
+        raise ValueError("длительность части и скорость должны быть числами")
+    if not math.isfinite(minutes) or minutes <= 0:
+        raise ValueError("длительность части должна быть положительным конечным числом минут")
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError("скорость сборки должна быть положительным конечным числом")
+    target_source_seconds = minutes * 60.0 * speed
     cache = load_durations()
     keys = [wav_for(r, roles).stem for r in rows]
     # WAV cache keys may repeat by design; book positions must instead use unique row IDs.
