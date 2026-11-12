@@ -163,33 +163,52 @@ def split_sentences(text: str):
 
 
 def chunk_text(text: str, max_chars: int = MAX_CHARS):
-    """Режем длинный текст по предложениям в куски <= max_chars; очень длинные предложения — по запятым."""
+    """Делит текст на непустые куски не длиннее max_chars, не теряя пунктуацию."""
+    text = str(text or "").strip()
+    if not text:
+        return []
+    max_chars = max(1, int(max_chars))
     chunks, cur = [], ""
-    for s in split_sentences(text):
-        if len(s) > max_chars * 1.5:
-            # режем по запятым/точкам с запятой
-            piece = ""
-            for frag in re.split(r"(?<=[,;:])\s+", s):
-                if piece and len(piece) + len(frag) + 1 > max_chars:
-                    chunks.append(piece)
-                    piece = frag
-                else:
-                    piece = (piece + " " + frag).strip()
-            if piece:
-                if cur and len(cur) + len(piece) + 1 <= max_chars:
-                    cur = cur + " " + piece
-                else:
+
+    def append_piece(piece):
+        nonlocal cur
+        piece = piece.strip()
+        if not piece:
+            return
+        if len(piece) > max_chars:
+            # Резервное деление по словам; сверхдлинное «слово» режется только в крайнем случае.
+            for word in re.findall(r"\\S+", piece):
+                while len(word) > max_chars:
                     if cur:
                         chunks.append(cur)
-                    cur = piece
-            continue
-        if cur and len(cur) + len(s) + 1 > max_chars:
+                        cur = ""
+                    chunks.append(word[:max_chars])
+                    word = word[max_chars:]
+                if word:
+                    if cur and len(cur) + 1 + len(word) > max_chars:
+                        chunks.append(cur)
+                        cur = word
+                    else:
+                        cur = (cur + " " + word).strip()
+            return
+        if cur and len(cur) + 1 + len(piece) > max_chars:
             chunks.append(cur)
-            cur = s
+            cur = piece
         else:
-            cur = (cur + " " + s).strip()
+            cur = (cur + " " + piece).strip()
+
+    for sentence in split_sentences(text):
+        sentence = sentence.strip()
+        if len(sentence) <= max_chars:
+            append_piece(sentence)
+            continue
+        # Сначала сохраняем естественные границы по запятым, точкам с запятой и двоеточиям.
+        for fragment in re.split(r"(?<=[,;:])\\s+", sentence):
+            append_piece(fragment)
     if cur:
         chunks.append(cur)
+    if any(not c or len(c) > max_chars for c in chunks):
+        raise ValueError("chunk_text: нарушена граница длины сегмента")
     return chunks
 
 
@@ -592,27 +611,28 @@ def write_wav_atomic(path: Path, data, sr):
 
 
 def claim(path: Path) -> bool:
-    """Атомарно «занять» сегмент (файл-замок рядом с будущим wav). Несколько воркеров могут работать
-    над одной очередью одновременно, не мешая друг другу."""
+    """Атомарно занять WAV. Старый lock не перехватывается автоматически: его возраст не доказывает смерть владельца."""
     lock = path.with_suffix(".lock")
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.close(fd)
+        try:
+            os.write(fd, str(os.getpid()).encode("ascii"))
+        finally:
+            os.close(fd)
         return True
     except FileExistsError:
-        try:
-            if time.time() - lock.stat().st_mtime > LOCK_STALE_SEC and not path.exists():
-                lock.touch()                 # брошенный замок упавшего воркера — забираем
-                return True
-        except OSError:
-            pass
+        # Fail closed: автоматическое touch()/перехватывание могло дать двум воркерам один WAV.
         return False
 
 
 def release(path: Path):
+    """Удаляет только собственный lock; чужой lock не трогает."""
+    lock = path.with_suffix(".lock")
     try:
-        path.with_suffix(".lock").unlink()
-    except OSError:
+        owner = lock.read_text(encoding="ascii").strip()
+        if owner == str(os.getpid()):
+            lock.unlink()
+    except (OSError, UnicodeError):
         pass
 
 
@@ -973,12 +993,16 @@ def load_durations():
 
 
 def duration_of(path: Path, cache: dict) -> float:
+    """Длительность WAV с инвалидацией кэша при перезаписи файла."""
     import soundfile as sf
-    k = path.stem
+    st = path.stat()
+    k = f"{path.name}|{st.st_size}|{st.st_mtime_ns}"
     if k not in cache:
         info = sf.info(str(path))
+        if not info.samplerate:
+            raise ValueError(f"некорректная частота дискретизации WAV: {path}")
         cache[k] = info.frames / info.samplerate
-    return cache[k]
+    return float(cache[k])
 
 
 def assemble(rows, roles, head_pause=True):
@@ -1106,11 +1130,25 @@ def plan_parts(rows, roles, minutes: float):
     заморожены в work/parts.json (по хешам сегментов), чтобы номера частей не «ехали» между запусками."""
     cache = load_durations()
     keys = [wav_for(r, roles).stem for r in rows]
-    key_pos = {k: i for i, k in enumerate(keys)}
+    # WAV cache keys may repeat by design; book positions must instead use unique row IDs.
+    id_pos = {str(r["id"]): i for i, r in enumerate(rows)}
+    key_positions = {}
+    for i, key in enumerate(keys):
+        key_positions.setdefault(key, []).append(i)
     frozen = []
     try:
-        for p in json.loads(PARTS_INDEX.read_text(encoding="utf-8")):
-            a, b = key_pos.get(p["start"]), key_pos.get(p["end"])
+        saved = json.loads(PARTS_INDEX.read_text(encoding="utf-8"))
+        for p in saved:
+            if "start_id" in p and "end_id" in p:
+                a, b = id_pos.get(str(p["start_id"])), id_pos.get(str(p["end_id"]))
+            else:
+                # Старый индекс по WAV-хешу неоднозначен при повторяющихся репликах.
+                # Мигрируем его только если обе границы встречаются ровно один раз.
+                starts = key_positions.get(p.get("start"), [])
+                ends = key_positions.get(p.get("end"), [])
+                if len(starts) != 1 or len(ends) != 1:
+                    break
+                a, b = starts[0], ends[0]
             if a is None or b is None or b < a or (frozen and a != frozen[-1][1] + 1) or (not frozen and a != 0):
                 break
             frozen.append((a, b))
@@ -1149,7 +1187,8 @@ def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=F
     for n, (a, b, closed) in enumerate(parts, 1):
         if not closed:
             break
-        frozen.append({"n": n, "start": wav_for(rows[a], roles).stem, "end": wav_for(rows[b], roles).stem})
+        frozen.append({"n": n, "start_id": str(rows[a]["id"]), "end_id": str(rows[b]["id"]),
+                       "start": wav_for(rows[a], roles).stem, "end": wav_for(rows[b], roles).stem})
         out = PARTS / f"part_{n:02d}.{fmt}"
         if out.exists():
             continue
