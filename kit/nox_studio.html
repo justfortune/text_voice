@@ -885,7 +885,7 @@ function bindInsp(s){
   on("#synthAll", "click", synthAll);
   for(const b of document.querySelectorAll('.take [data-trim]')) b.addEventListener("click", () => trimDialog(s.uid, b.dataset.trim));
   on("#ownRec", "click", () => ownRecord(s.uid));
-   on("#ownMic", "click", () => recordOwn(s.uid));
+   on("#ownMic", "click", () => recordOwn(s.uid, "phrase"));
   on("#insAfter", "click", () => insertDialog(s.uid));
   on("#insEdit", "click", () => insertEditDialog(s.uid));
   on("#insDel", "click", () => insertDelete(s.uid));
@@ -1101,14 +1101,26 @@ async function ownRecord(uid, file){
     if(!r.ok || j.error) throw new Error(j.error || ("ошибка " + r.status));
     S.ed = null; if(j.part) setPart(j.part);
     const tk = j.take;
-    toast("Ваша запись стала новым дублем фразы № " + s.id + " (" + Number(tk.dur).toFixed(1) + " с)" + (tk.trim ? ". Тишина по краям обрезана" : "") + ". Прежние дубли на месте, исходный файл сохранён в studio\\imports.", "ok", 14000, ["Обрезать…", () => trimDialog(uid, tk.tid)]);
-  } catch(e){ fail(e); }
+    toast("Ваша запись стала новым дублем фразы № " + s.id + " (" + Number(tk.dur).toFixed(1) + " с)" + (tk.trim ? ". Тишина по краям обрезана" : "") + ". Прежние дубли на месте, исходный файл сохранён в studio\\imports.", "ok", 14000, ["Обрезать…", () => trimDialog(uid, tk.tid)]); return true;
+  } catch(e){ fail(e); return false; }
   finally { S.posts--; t.remove(); }
 }
 // ---------------------------------------------------------------- запись собственного голоса непосредственно с микрофона
 let MIC = null;
-async function recordOwn(uid){
+async function recordOwn(uid, scope){
   const s = segOf(uid); if(!s) return;
+  scope = scope || "phrase";
+  let group = [s];
+  if(scope === "para"){
+    group = S.part.segs.filter(x => x.para === s.para).sort((a,b)=>a.i-b.i);
+    if(!group.length || !group.some(x=>x.uid===uid)){toast("Не удалось определить абзац выбранной фразы.", "red");return;}
+    const head = group[0];
+    const invalid = group.find(x=>x.locked || x.ins || x.kind==="head" || x.role!==head.role || (x.joined&&x.joined.length));
+    if(invalid){toast("Абзац нельзя записать одним дублем: в нём есть закреплённая/вставленная/соединённая фраза или меняется говорящий. Снимите закрепление, разделите соединение либо запишите фразы отдельно.", "red", 12000);return;}
+    const positions = group.map(x=>x.i);
+    if(positions.some((v,i)=>i && v!==positions[i-1]+1)){toast("Абзац не является непрерывным фрагментом таймлайна. Запишите фразы отдельно.", "red", 9000);return;}
+    uid=head.uid;
+  }
   if(s.locked){ toast("Фраза закреплена — сначала снимите закрепление.", "red"); return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined"){
     toast("Запись микрофона недоступна. Откройте студию в актуальном Chrome или Edge.", "red", 9000); return;
@@ -1131,7 +1143,7 @@ async function recordOwn(uid){
   MIC={uid,rec,stream,clock:0};
   rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
   rec.onerror=e=>{const msg=e.error&&e.error.message||"ошибка записи";micRelease();closeDialog();toast("Ошибка микрофона: "+msg,"red",9000);};
-  dialog('<h3>Запись фразы № '+esc(s.id)+'</h3><p style="font:18px/1.55 var(--serif)">'+esc(s.tech)+'</p>'
+  dialog('<h3>Запись '+(scope==="para" ? "абзаца" : "фразы № "+esc(s.id))+'</h3><p style="font:18px/1.55 var(--serif)">'+esc(group.map(x=>x.tech).join(" "))+'</p>'
     +'<p class="note">Запись выполняется локально. Проверьте уровень микрофона и говорите естественно, с небольшим расстоянием до него. '
     +'Файл отправится в проект только после нажатия «Остановить и сохранить». Максимум — 3 минуты.</p>'
     +'<p id="micClock" class="num" style="font-size:24px">00:00</p><p class="note">Идёт запись…</p>',
@@ -1143,7 +1155,7 @@ async function recordOwn(uid){
     if(blob.size<1500||elapsed<0.25){toast("Запись слишком короткая или пустая. Повторите.", "red");return;}
     const ext=(rec.mimeType||"").includes("mp4")?"m4a":"webm";
     const file=new File([blob],"microphone_"+new Date().toISOString().replace(/[:.]/g,"-")+"."+ext,{type:blob.type,lastModified:Date.now()});
-    await ownRecord(uid,file);
+    if(scope === "para" && group.length > 1) await ownParagraphRecord(uid, group, file); else await ownRecord(uid,file);
   };
   rec.start(500);
   MIC.clock=setInterval(()=>{
@@ -1152,6 +1164,24 @@ async function recordOwn(uid){
     if(el)el.textContent=String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0");
     if(sec>=180&&rec.state!=="inactive"){keep=true;rec.stop();closeDialog();toast("Достигнут предел 3 минуты — сохраняю запись.", "blue",6000);}
   },250);
+}
+async function ownParagraphRecord(headUid, group, file){
+  let joined=0;
+  try{
+    for(let i=1;i<group.length;i++){
+      const r=await api("/api/join",{uid:headUid});
+      if(r.part)setPart(r.part);
+      joined++;
+    }
+    const ok=await ownRecord(headUid,file);
+    if(!ok)throw new Error("не удалось сохранить запись абзаца");
+    toast("Запись сохранена как один дубль абзаца ("+group.length+" фраз). Исходные записи фраз сохранены и вернутся при разъединении.", "ok", 10000);
+  }catch(e){
+    for(let i=0;i<joined;i++){
+      try{const r=await api("/api/unjoin",{uid:headUid});if(r.part)setPart(r.part);}catch(rollback){toast("Не удалось автоматически отменить соединение абзаца. Проверьте журнал и разъедините фразы вручную.", "red", 12000);break;}
+    }
+    fail(e);
+  }
 }
 function micRelease(){
   if(!MIC)return;
