@@ -204,5 +204,34 @@ class JoinSaveRollbackTests(unittest.TestCase):
         self.assertEqual(undo_before, s.undo)
 
 
+class GlueArtifactRollbackTests(unittest.TestCase):
+    def test_metadata_failure_removes_only_new_glue_artifacts(self):
+        import tempfile
+        import types
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as root:
+            s = studio.Studio.__new__(studio.Studio)
+            s.takes_dir = Path(root)
+            s._takes = {}
+            s.read_audio = lambda path: (np.ones(2400, dtype="float32"), 24000)
+            s.row_text = lambda index: "joined phrase"
+            e = {"sid": "sa"}
+            fake_soundfile = types.SimpleNamespace(
+                write=lambda path, audio, rate, subtype: Path(path).write_bytes(b"wav")
+            )
+            with patch.dict(sys.modules, {"soundfile": fake_soundfile}), \
+                 patch.object(studio.n, "NORM_ON", False), \
+                 patch.object(studio, "write_atomic", side_effect=OSError("metadata write failed")):
+                with self.assertRaisesRegex(OSError, "metadata write failed"):
+                    s._glue(0, e, {"path": "first"}, {"path": "second"}, "voice", "joined phrase")
+
+            take_dir = Path(root) / "sa"
+            self.assertFalse(take_dir.exists() and list(take_dir.iterdir()))
+            self.assertEqual(1, e["tseq"])
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
