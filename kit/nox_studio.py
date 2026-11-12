@@ -1480,7 +1480,9 @@ class Studio:
             acc += int(r["pause_before_ms"]) / 1000 + n.duration_of(p, cache)
             nxt = self.rows[i + 1] if i + 1 < len(self.rows) else None
             ok = nxt is None or nxt["kind"] == "head" or int(nxt["pause_before_ms"]) >= n.PAUSE["para"]
-            if (acc >= self.part_min * 60 * max(n.TEMPO_G, 1.0) and ok) or nxt is None:
+            # Считаем целевую длительность по той же конечной скорости, что и экспорт (_encode).
+            # Общий TEMPO_G меняет темп отдельных голосов, но не является скоростью файла целиком.
+            if (acc >= n.part_source_seconds(self.part_min, self.speed) and ok) or nxt is None:
                 out.append((a, i))
                 a, acc = i + 1, 0.0
         return out
