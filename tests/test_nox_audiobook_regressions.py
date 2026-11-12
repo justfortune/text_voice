@@ -120,6 +120,33 @@ class PartIndexTests(unittest.TestCase):
 
 
 class LockTests(unittest.TestCase):
+    def test_stale_lock_with_live_or_unknown_owner_is_never_stolen(self):
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "voice.wav"
+            lock = wav.with_suffix(".lock")
+            lock.write_text("12345", encoding="ascii")
+            old = 1
+            os.utime(lock, (old, old))
+            with patch.object(n, "_pid_alive", return_value=True):
+                self.assertFalse(n.claim(wav))
+            self.assertEqual("12345", lock.read_text(encoding="ascii"))
+            with patch.object(n, "_pid_alive", return_value=None):
+                self.assertFalse(n.claim(wav))
+            self.assertEqual("12345", lock.read_text(encoding="ascii"))
+
+    def test_stale_lock_with_confirmed_dead_owner_can_be_reclaimed(self):
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "voice.wav"
+            lock = wav.with_suffix(".lock")
+            lock.write_text("12345", encoding="ascii")
+            old = 1
+            os.utime(lock, (old, old))
+            with patch.object(n, "_pid_alive", return_value=False):
+                self.assertTrue(n.claim(wav))
+            self.assertEqual(str(os.getpid()), lock.read_text(encoding="ascii"))
+            n.release(wav)
+            self.assertFalse(lock.exists())
+
     def test_claim_is_exclusive_and_release_is_owner_checked(self):
         with tempfile.TemporaryDirectory() as td:
             wav = Path(td) / "voice.wav"
