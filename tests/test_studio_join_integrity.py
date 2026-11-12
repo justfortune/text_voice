@@ -133,6 +133,27 @@ class StudioPidSafetyTests(unittest.TestCase):
             self.assertTrue(studio.pid_alive(123))
         self.assertEqual([1234], closed)
 
+    def test_windows_api_load_failure_is_conservative(self):
+        with patch.object(studio.os, "name", "nt"), \\
+             patch.object(ctypes, "WinDLL", side_effect=OSError("kernel32 unavailable"), create=True):
+            self.assertTrue(studio.pid_alive(123))
+
+    def test_posix_existing_process_is_alive(self):
+        with patch.object(studio.os, "name", "posix"), \\
+             patch.object(studio.os, "kill") as kill:
+            self.assertTrue(studio.pid_alive(123))
+            kill.assert_called_once_with(123, 0)
+
+    def test_posix_missing_process_is_dead(self):
+        with patch.object(studio.os, "name", "posix"), \\
+             patch.object(studio.os, "kill", side_effect=ProcessLookupError):
+            self.assertFalse(studio.pid_alive(123))
+
+    def test_posix_permission_error_is_conservative(self):
+        with patch.object(studio.os, "name", "posix"), \\
+             patch.object(studio.os, "kill", side_effect=PermissionError):
+            self.assertTrue(studio.pid_alive(123))
+
     def test_non_positive_pid_is_not_alive(self):
         self.assertFalse(studio.pid_alive(0))
         self.assertFalse(studio.pid_alive(-1))
