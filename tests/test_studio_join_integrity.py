@@ -240,6 +240,7 @@ class GeneralUndoSaveRollbackTests(unittest.TestCase):
         s = studio.Studio.__new__(studio.Studio)
         s.lock = threading.RLock()
         s.idx_of = {"a": 0}
+        s._abs = {}
         s.store = {"segs": {"a": {"sid": "sa", "tech": "current"}}}
         s.undo = []
         s.joins_refresh = lambda: 0
