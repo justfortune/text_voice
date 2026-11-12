@@ -32,13 +32,13 @@ class ChunkTextTests(unittest.TestCase):
 
 
 class PartDurationPlanningTests(unittest.TestCase):
-    def _plan(self, speed, frozen=None):
+    def _plan(self, speed, frozen=None, duration=60.0):
         import json
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             rows = [
                 {"id": i + 1, "pause_before_ms": pause, "kind": "text"}
-                for i, pause in enumerate((0, 0, 1000, 1000))
+                for i, pause in enumerate((0, 1000, 1000, 1000))
             ]
             wavs = {str(row["id"]): root / (str(row["id"]) + ".wav") for row in rows}
             for wav in wavs.values():
@@ -52,7 +52,7 @@ class PartDurationPlanningTests(unittest.TestCase):
                  patch.object(n, "PAUSE", {"para": 1000}), \
                  patch.object(n, "load_durations", return_value={}), \
                  patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \
-                 patch.object(n, "duration_of", return_value=60.0):
+                 patch.object(n, "duration_of", return_value=duration):
                 return n.plan_parts(rows, {}, 2.0, speed=speed)[0]
 
     def test_faster_export_plans_more_source_audio_for_same_final_duration(self):
@@ -62,8 +62,10 @@ class PartDurationPlanningTests(unittest.TestCase):
         self.assertEqual(2, faster[0][1])
 
     def test_slower_export_uses_shorter_source_threshold(self):
-        slower = self._plan(0.8)
+        slower = self._plan(0.8, duration=50.0)
+        normal = self._plan(1.0, duration=50.0)
         self.assertEqual(1, slower[0][1])
+        self.assertEqual(2, normal[0][1])
 
     def test_existing_frozen_boundaries_do_not_move_when_speed_changes(self):
         frozen = [{
