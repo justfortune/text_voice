@@ -85,7 +85,7 @@ def norm_t(t) -> str:
 
 
 SND_SR = 24000
-SND_EXT = (".wav", ".mp3", ".ogg", ".oga", ".flac", ".m4a", ".aac", ".opus", ".wma", ".aif", ".aiff")
+SND_EXT = (".wav", ".webm", ".mp3", ".ogg", ".oga", ".flac", ".m4a", ".aac", ".opus", ".wma", ".aif", ".aiff")
 CUE_KINDS = ("sfx", "amb", "mus")
 CUE_NAME = {"sfx": "звук", "amb": "фон", "mus": "музыка"}
 # Правки автора в звуке, пришедшем из партитуры книги: что именно он менял (остальное при обновлении партитуры берётся из неё)
