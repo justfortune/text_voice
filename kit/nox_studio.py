@@ -3763,7 +3763,7 @@ class Studio:
                 except OSError:
                     break
                 try:
-                    digest = sha(f.read_bytes(), 16)
+                    digest = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
                 except OSError:
                     break
                 file_sig.append((num, st.st_size, st.st_mtime_ns, digest))
