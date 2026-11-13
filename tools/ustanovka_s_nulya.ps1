@@ -115,8 +115,8 @@ try {
             $condaExe = $env:CONDA_EXE
             if (-not $condaExe) {
                 foreach ($c in @("$env:USERPROFILE\anaconda3\Scripts\conda.exe", "$env:USERPROFILE\miniconda3\Scripts\conda.exe", "$env:LOCALAPPDATA\anaconda3\Scripts\conda.exe",
-                                 "$env:LOCALAPPDATA\miniconda3\Scripts\conda.exe", "$env:ProgramData\anaconda3\Scripts\conda.exe",
-                                 "$env:ProgramData\miniconda3\Scripts\conda.exe", "C:\anaconda3\Scripts\conda.exe", "C:\miniconda3\Scripts\conda.exe")) { if (Test-Path -LiteralPath $c) { $condaExe = $c; break } }
+                                 "$env:LOCALAPPDATA\miniconda3\Scripts\conda.exe", "$env:ProgramData\anaconda3\Scripts\conda.exe", "$env:ProgramData\miniconda3\Scripts\conda.exe",
+                                 "C:\anaconda3\Scripts\conda.exe", "C:\miniconda3\Scripts\conda.exe")) { if (Test-Path -LiteralPath $c) { $condaExe = $c; break } }
             }
             if ($condaExe) {
                 Say "  conda найдена: окружение Python 3.12 (так стоит на рабочей машине)"
