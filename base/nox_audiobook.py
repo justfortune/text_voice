@@ -1288,8 +1288,10 @@ def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=F
     for n, (a, b, closed) in enumerate(parts, 1):
         if not closed:
             break
+        part_keys = [wav_for(row, roles).stem for row in rows[a:b + 1]]
+        part_sig = hashlib.sha256("\n".join(part_keys).encode("utf-8")).hexdigest()
         frozen.append({"n": n, "start_id": str(rows[a]["id"]), "end_id": str(rows[b]["id"]),
-                       "start": wav_for(rows[a], roles).stem, "end": wav_for(rows[b], roles).stem})
+                       "start": part_keys[0], "end": part_keys[-1], "sig": part_sig})
         out = PARTS / f"part_{n:02d}.{fmt}"
         if out.exists():
             continue
