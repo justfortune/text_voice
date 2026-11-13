@@ -1950,7 +1950,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     e = sub.add_parser("editions", help="список сохранённых редакций книги (CSV, роли, карта и готовые части)")
-    r = sub.add_parser("restore-edition", help="безопасно восстановить сохранённую редакцию книги и её таймлайн")
+    r = sub.add_parser("restore-edition", help="восстановить редакцию и её таймлайн; перед запуском закройте студию")
     r.add_argument("edition_id", help="первые 20 hex-символов ID из команды editions")
 
 
