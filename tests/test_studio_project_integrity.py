@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Project archive and cross-folder audio identity regression tests."""
 import hashlib
+import json
+import threading
 import zipfile
 import tempfile
 import unittest
@@ -91,6 +93,43 @@ class ProjectArchiveIntegrityTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.s = studio.Studio.__new__(studio.Studio)
+
+    def test_project_check_does_not_create_home_id(self):
+        archive = self.root / "external.noxproj"
+        state = {"segs": {}, "parts": []}
+        edits = json.dumps(state).encode("utf-8")
+        manifest = {
+            "format": "noxproj",
+            "ver": studio.Studio.PROJ_FMT,
+            "edits_sha": hashlib.sha1(edits).hexdigest(),
+            "home": "another-folder-id",
+            "title": "Test book",
+        }
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest))
+            zf.writestr("edits.json", edits)
+            zf.writestr("files.json", json.dumps({"files": {}, "need": {}}))
+
+        s = studio.Studio.__new__(studio.Studio)
+        s.dir = self.root / "current-studio"
+        s.lock = threading.RLock()
+        s.store = {"segs": {}, "parts": []}
+        s.roles = {"roles": []}
+        s._proj_path = lambda _name: archive
+        s._proj_compat = lambda _m, _st: {
+            "same": True, "other": False, "found": 0, "lost": 0, "total": 0
+        }
+        s._proj_info = lambda _path: {}
+        s._proj_audio_check = lambda _files, _need, foreign=False: {
+            "have": 0, "add": 0, "differ": 0, "trash": 0, "missing": 0, "unverified": 0
+        }
+        s._proj_busy_why = lambda: ""
+
+        result = s.project_check("external.noxproj")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse((s.dir / "home.id").exists())
+        self.assertTrue(any("другой папке" in warning for warning in result["warn"]))
 
     def test_reader_closes_zip_when_manifest_cannot_be_read(self):
         fake_zip = Mock()
