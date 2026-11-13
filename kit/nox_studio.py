@@ -560,27 +560,44 @@ class Studio:
         if ins:                                        # фразы, вставленные автором в студии, — на свои места
             rows, keys, uids, pidx = self.splice_ins(rows, keys, uids, ins, roles)
         with self.lock:
-            self.rows, self.roles, self.keys, self.uids = rows, roles, keys, uids
-            self.pidx = pidx                           # номер реплики у конвейера (None — вставка студии)
-            self.sidx = [i for i, q in enumerate(pidx) if q is not None]      # реплика конвейера -> место в ряду студии
-            self.idx_of = {u: i for i, u in enumerate(uids)}
-            self.id2i = {r["id"]: i for i, r in enumerate(rows)}
-            self._spans = {}
-            self._clock = (0.0, {})
-            self.stems = n.voice_stems(roles)
-            self.base_roles = [self._role_of(r, roles) for r in rows]
-            self.role_cnt = collections.Counter(self.base_roles)
-            self.wavs = [n.wav_for(r, roles) if not r.get("ins") else self.takes_dir / "_ins" / (r["ins"] + ".wav") for r in rows]
-            ch = {}
-            for i, r in enumerate(rows):
-                c = int(r["chapter"])
-                if c not in ch:
-                    ch[c] = [i, i, r["ch_title"]]
-                ch[c][1] = i
-            self.chapters = ch
-            self.rows_sig, self.rows_at = sig, time.time()
-            if getattr(self, "store", None) is not None:
-                self.reanchor()
+            row_attrs = ("rows", "roles", "keys", "uids", "pidx", "sidx", "idx_of", "id2i", "_spans",
+                         "_clock", "stems", "base_roles", "role_cnt", "wavs", "chapters", "rows_sig", "rows_at", "_abs")
+            missing = object()
+            previous_rows = {key: getattr(self, key, missing) for key in row_attrs}
+            previous_store = self.store
+            previous_store_data = json.loads(jd(previous_store)) if strict and previous_store is not None else None
+            try:
+                self.rows, self.roles, self.keys, self.uids = rows, roles, keys, uids
+                self.pidx = pidx                           # номер реплики конвейера (None — вставка студии)
+                self.sidx = [i for i, q in enumerate(pidx) if q is not None]      # реплика конвейера -> место в ряду студии
+                self.idx_of = {u: i for i, u in enumerate(uids)}
+                self.id2i = {r["id"]: i for i, r in enumerate(rows)}
+                self._spans = {}
+                self._clock = (0.0, {})
+                self.stems = n.voice_stems(roles)
+                self.base_roles = [self._role_of(r, roles) for r in rows]
+                self.role_cnt = collections.Counter(self.base_roles)
+                self.wavs = [n.wav_for(r, roles) if not r.get("ins") else self.takes_dir / "_ins" / (r["ins"] + ".wav") for r in rows]
+                ch = {}
+                for i, r in enumerate(rows):
+                    c = int(r["chapter"])
+                    if c not in ch:
+                        ch[c] = [i, i, r["ch_title"]]
+                    ch[c][1] = i
+                self.chapters = ch
+                self.rows_sig, self.rows_at = sig, time.time()
+                if getattr(self, "store", None) is not None:
+                    self.reanchor(persist=not strict)
+            except Exception:
+                if strict:
+                    if previous_store_data is not None:
+                        self.store = previous_store_data
+                    for key, value in previous_rows.items():
+                        if value is missing:
+                            self.__dict__.pop(key, None)
+                        else:
+                            setattr(self, key, value)
+                raise
         return True
 
     @staticmethod
@@ -890,7 +907,7 @@ class Studio:
         return not any(e.get(k) not in (None, "", False, []) for k in ("role", "tech", "tempo", "pause", "take", "locked",
                                                                         "mark", "ack", "after", "join", "into"))
 
-    def reanchor(self):
+    def reanchor(self, persist=True):
         """Правки ищут свои фразы заново (после переразбивки книги): тот же текст и хотя бы один прежний сосед.
         Фраза исчезла из книги — правка уходит в «без места» (не удаляется)."""
         by_key = {}
@@ -934,10 +951,12 @@ class Studio:
         if dropped:
             log(f"соединённые фразы: снято соединений — {dropped} (книга переразбита или между фразами встала вставка); "
                 "фразы вернулись к виду до соединения", "warn")
-            self.save("соединения фраз сняты: цепочка разошлась", {"count": dropped})
+            if persist:
+                self.save("соединения фраз сняты: цепочка разошлась", {"count": dropped})
         if moved or lost:
             log(f"привязка правок: переехало {moved}, без места {lost}")
-            self.save("привязка правок после переразбивки", {"moved": moved, "lost": lost})
+            if persist:
+                self.save("привязка правок после переразбивки", {"moved": moved, "lost": lost})
 
     # ------------------------------------------------------------------ соединённые фразы
     # Автор соединяет фразу со следующей: дальше это одна фраза — в списке, в звуке, при переозвучке. В книге конвейера обе
