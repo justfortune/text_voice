@@ -212,7 +212,7 @@ class BookEditionSnapshotTests(unittest.TestCase):
             self.assertIn("old edition", original_map)
             self.assertEqual(b"new-edition-audio", (parts / "part_01.m4b").read_bytes())
             self.assertEqual(b"previous-book-audio", (snapshot / "parts" / "part_01.m4b").read_bytes())
-            self.assertEqual(False, manifest["audio_copied"])
+            self.assertEqual(manifest["audio_preservation"][0]["method"] == "copy", manifest["audio_copied"])
             self.assertEqual("parts/part_01.m4b", manifest["audio_preservation"][0]["path"])
             self.assertIn(manifest["audio_preservation"][0]["method"], ("hardlink", "copy"))
             self.assertEqual([{
