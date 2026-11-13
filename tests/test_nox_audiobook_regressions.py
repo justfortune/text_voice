@@ -329,6 +329,7 @@ class PartsIndexRecoveryTests(unittest.TestCase):
             saved = [
                 {"n": i + 1, "start_id": str(i + 1), "end_id": str(i + 1),
                  "start": keys[i], "end": keys[i], "sig": signatures[i],
+                 "build_sig": f"build-{i + 1}",
                  "output_sha256": ("0" * 64 if i == 1 else None)}
                 for i in range(2)
             ]
@@ -347,6 +348,7 @@ class PartsIndexRecoveryTests(unittest.TestCase):
                  patch.object(n, "wav_for", side_effect=lambda row, _roles: wavs[int(row["id"]) - 1]), \
                  patch.object(n, "duration_of", return_value=120.0), \
                  patch.object(n, "assemble", return_value=(None, 24000, [], None)), \
+                 patch.object(n, "_part_build_signature", side_effect=lambda _rows, _roles, a, _b, *_args: f"build-{a + 1}"), \
                  patch.object(n, "encode_m4b", side_effect=encode):
                 with self.assertRaisesRegex(ValueError, "контрольная сумма не совпадает"):
                     n.build_parts(rows, {}, 2.0, "Book", "Author", "96k", quiet=True)
@@ -357,6 +359,76 @@ class PartsIndexRecoveryTests(unittest.TestCase):
             self.assertEqual("0" * 64, persisted[1]["output_sha256"])
             self.assertTrue((parts / "part_01.m4b").is_file())
             self.assertEqual(b"second-edition-audio", part_two.read_bytes())
+
+
+    def test_existing_part_is_not_reused_after_encoder_configuration_changes(self):
+        import hashlib
+        import json
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parts = root / "parts"
+            parts.mkdir()
+            index = root / "parts.json"
+            output = parts / "part_01.m4b"
+            output.write_bytes(b"audio-encoded-at-old-speed")
+            wav = root / "voice.wav"
+            wav.write_bytes(b"wav")
+            row = {"id": 1, "speaker": "narrator", "text": "same text",
+                   "pause_before_ms": 0, "kind": "text", "ch_title": "Chapter"}
+            sig = hashlib.sha256(wav.stem.encode("utf-8")).hexdigest()
+            index.write_text(json.dumps([{
+                "n": 1, "start_id": "1", "end_id": "1",
+                "start": wav.stem, "end": wav.stem, "sig": sig,
+                "build_sig": "old-speed-and-settings",
+                "output_sha256": n._file_sha256(output),
+            }]), encoding="utf-8")
+
+            with patch.object(n, "PARTS", parts), \
+                 patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "wav_for", return_value=wav), \
+                 patch.object(n, "duration_of", return_value=120.0), \
+                 patch.object(n, "_part_build_signature", return_value="new-speed-and-settings"):
+                with self.assertRaisesRegex(ValueError, "другими параметрами"):
+                    n.build_parts([row], {}, 2.0, "Book", "Author", "96k", quiet=True, speed=1.25)
+
+            self.assertEqual(b"audio-encoded-at-old-speed", output.read_bytes())
+
+    def test_legacy_part_index_without_build_signature_is_not_silently_reused(self):
+        import hashlib
+        import json
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parts = root / "parts"
+            parts.mkdir()
+            index = root / "parts.json"
+            output = parts / "part_01.m4b"
+            output.write_bytes(b"legacy-audio")
+            wav = root / "voice.wav"
+            wav.write_bytes(b"wav")
+            row = {"id": 1, "speaker": "narrator", "text": "same text",
+                   "pause_before_ms": 0, "kind": "text", "ch_title": "Chapter"}
+            sig = hashlib.sha256(wav.stem.encode("utf-8")).hexdigest()
+            index.write_text(json.dumps([{
+                "n": 1, "start_id": "1", "end_id": "1",
+                "start": wav.stem, "end": wav.stem, "sig": sig,
+                "output_sha256": n._file_sha256(output),
+            }]), encoding="utf-8")
+
+            with patch.object(n, "PARTS", parts), \
+                 patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "wav_for", return_value=wav), \
+                 patch.object(n, "duration_of", return_value=120.0), \
+                 patch.object(n, "_part_build_signature", return_value="current-build-signature"):
+                with self.assertRaisesRegex(ValueError, "без подписи параметров сборки"):
+                    n.build_parts([row], {}, 2.0, "Book", "Author", "96k", quiet=True)
+
+            self.assertEqual(b"legacy-audio", output.read_bytes())
 
 
     def test_part_output_checksum_mismatch_is_not_silently_accepted(self):
@@ -377,6 +449,7 @@ class PartsIndexRecoveryTests(unittest.TestCase):
             index.write_text(json.dumps([{
                 "n": 1, "start_id": "1", "end_id": "1",
                 "start": wav.stem, "end": wav.stem, "sig": sig,
+                "build_sig": "build-1",
                 "output_sha256": "0" * 64,
             }]), encoding="utf-8")
 
@@ -385,7 +458,8 @@ class PartsIndexRecoveryTests(unittest.TestCase):
                  patch.object(n, "DUR_CACHE", root / "durations.json"), \
                  patch.object(n, "load_durations", return_value={}), \
                  patch.object(n, "wav_for", return_value=wav), \
-                 patch.object(n, "duration_of", return_value=120.0):
+                 patch.object(n, "duration_of", return_value=120.0), \
+                 patch.object(n, "_part_build_signature", return_value="build-1"):
                 with self.assertRaisesRegex(ValueError, "контрольная сумма не совпадает"):
                     n.build_parts([row], {}, 2.0, "Book", "Author", "96k", quiet=True)
 
