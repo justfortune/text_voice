@@ -209,8 +209,11 @@ class BookEditionSnapshotTests(unittest.TestCase):
             self.assertIn("old edition", original_map)
             self.assertEqual(b"previous-book-audio", (parts / "part_01.m4b").read_bytes())
             self.assertEqual(False, manifest["audio_copied"])
-            self.assertEqual([{"path": "parts/part_01.m4b", "size": len(b"previous-book-audio")}],
-                             manifest["outputs_kept_in_place"])
+            self.assertEqual([{
+                "path": "parts/part_01.m4b",
+                "size": len(b"previous-book-audio"),
+                "sha256": n._file_sha256(parts / "part_01.m4b"),
+            }], manifest["outputs_kept_in_place"])
 
     def test_corrupt_existing_edition_snapshot_stops_before_source_replacement(self):
         with tempfile.TemporaryDirectory() as td:
