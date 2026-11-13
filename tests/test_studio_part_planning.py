@@ -76,6 +76,26 @@ class PipelinePartIndexCompatibilityTests(unittest.TestCase):
             with patch.object(studio, "n", pipeline):
                 self.assertEqual([(0, 1), (2, 3)], s.pipeline_parts(0))
 
+    def test_plan_keeps_opened_part_and_discovers_following_pipeline_parts(self):
+        import threading
+
+        with tempfile.TemporaryDirectory() as td:
+            s, pipeline = self._studio_with_index(td, [
+                {"n": 1, "start_id": "1", "end_id": "2", "start": "a", "end": "b"},
+                {"n": 2, "start_id": "3", "end_id": "4", "start": "c", "end": "d"},
+            ])
+            s.lock = threading.RLock()
+            s._parts_cache = None
+            s.store = {"parts": [{"last": "b.0", "last_i": 1, "last_p": 1}]}
+            s.idx_of = {"a.0": 0, "b.0": 1, "c.0": 2, "d.0": 3}
+            s.sidx = [0, 1, 2, 3]
+            with patch.object(studio, "n", pipeline):
+                planned = s.plan()
+            self.assertEqual([
+                {"n": 1, "a": 0, "b": 1, "opened": True},
+                {"n": 2, "a": 2, "b": 3, "opened": False},
+            ], planned)
+
     def test_legacy_parts_index_with_sig_remains_supported(self):
         with tempfile.TemporaryDirectory() as td:
             s, pipeline = self._studio_with_index(td, [
