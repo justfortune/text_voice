@@ -55,6 +55,80 @@ class LoadRowsFailurePolicyTests(unittest.TestCase):
         self.assertEqual([{"id": "existing"}], s.rows)
 
 
+class LoadRowsFailurePolicyTests(unittest.TestCase):
+    def _studio(self):
+        import threading
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.takes_dir = Path("takes")
+        s.rows = [{"id": "old"}]
+        s.roles = {"old": "role"}
+        s.keys = ["old-key"]
+        s.uids = ["old-key.0"]
+        s.pidx = [0]
+        s.sidx = [0]
+        s.idx_of = {"old-key.0": 0}
+        s.id2i = {"old": 0}
+        s._spans = {"old": 1}
+        s._clock = (1.0, {"old": 1})
+        s.stems = ["old"]
+        s.base_roles = ["old"]
+        s.role_cnt = {"old": 1}
+        s.wavs = [Path("old.wav")]
+        s.chapters = {1: [0, 0, "old"]}
+        s.rows_sig = "old-signature"
+        s.rows_at = 1.0
+        s._abs = {4: 3}
+        s.store = {"segs": {"old-key.0": {"tech": "preserve"}}, "orphans": []}
+        return s
+
+    def _source(self, voice_stems):
+        import types
+        row = {"id": 1, "chapter": 1, "ch_title": "Chapter", "para": 1, "kind": "text",
+               "speaker": "narrator", "pause_before_ms": 0, "text": "new row"}
+        fake_n = types.SimpleNamespace(
+            CSV_PATH=Path("missing-segments.csv"),
+            ROLES_PATH=Path("missing-roles.json"),
+            load_rows=lambda: [row],
+            load_roles=lambda: {},
+            voice_stems=voice_stems,
+        )
+        return fake_n
+
+    def test_strict_reload_rolls_back_all_derived_state_when_refresh_fails(self):
+        s = self._studio()
+        before = {key: getattr(s, key) for key in (
+            "rows", "roles", "keys", "uids", "pidx", "sidx", "idx_of", "id2i", "_spans",
+            "_clock", "stems", "base_roles", "role_cnt", "wavs", "chapters", "rows_sig", "rows_at", "_abs"
+        )}
+        store_before = studio.jd(s.store)
+        fake_n = self._source(lambda roles: (_ for _ in ()).throw(OSError("voice stems unavailable")))
+        with patch.object(studio, "n", fake_n):
+            with self.assertRaisesRegex(OSError, "voice stems unavailable"):
+                s.load_rows(force=True, strict=True)
+        for key, value in before.items():
+            self.assertEqual(value, getattr(s, key), key)
+        self.assertEqual(store_before, studio.jd(s.store))
+
+    def test_strict_reload_does_not_persist_intermediate_reanchor(self):
+        s = self._studio()
+        s.store = {"segs": {"missing-key.0": {"tech": "keep"}}, "orphans": [], "cues": [], "cue_orphans": []}
+        s.keys, s.uids, s.idx_of = [], [], {}
+        s._parts_cache = None
+        s.joins_refresh = lambda: 0
+        s.reanchor_cues = lambda: None
+        s.save = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("intermediate save must not run"))
+        s.reanchor(persist=False)
+        self.assertEqual(1, len(s.store["orphans"]))
+
+    def test_non_strict_reload_keeps_existing_runtime_fallback(self):
+        s = self._studio()
+        fake_n = self._source(lambda roles: (_ for _ in ()).throw(OSError("voice stems unavailable")))
+        with patch.object(studio, "n", fake_n):
+            self.assertFalse(s.load_rows(force=True))
+        self.assertEqual([{"id": "old"}], s.rows)
+
+
 class PhraseChainIntegrityTests(unittest.TestCase):
     def test_valid_multi_phrase_chain_is_reconstructed_in_book_order(self):
         s = make_studio(
