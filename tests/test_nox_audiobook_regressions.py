@@ -74,6 +74,58 @@ class PartDurationPlanningTests(unittest.TestCase):
         }]
         self.assertEqual(1, self._plan(1.5, frozen=frozen)[0][1])
 
+    def test_reused_sequential_ids_cannot_rebind_parts_to_a_different_edition(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rows = [
+                {"id": i, "text": f"new-{i}", "pause_before_ms": 1000, "kind": "text"}
+                for i in range(1, 5)
+            ]
+            wavs = {str(row["id"]): root / f"new-{row['id']}.wav" for row in rows}
+            for wav in wavs.values():
+                wav.write_bytes(b"wav")
+            index = root / "parts.json"
+            index.write_text(json.dumps([{
+                "n": 1, "start_id": "1", "end_id": "2",
+                "start": "old-1", "end": "old-2",
+            }]), encoding="utf-8")
+            with patch.object(n, "PARTS_INDEX", index), \\
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \\
+                 patch.object(n, "PAUSE", {"para": 1000}), \\
+                 patch.object(n, "load_durations", return_value={}), \\
+                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \\
+                 patch.object(n, "duration_of", return_value=40.0):
+                with self.assertRaisesRegex(ValueError, "другой редакции"):
+                    n.plan_parts(rows, {}, 2.0)
+
+    def test_frozen_part_signature_detects_middle_segment_edits(self):
+        import hashlib
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rows = [
+                {"id": i, "text": f"line-{i}", "pause_before_ms": 1000, "kind": "text"}
+                for i in range(1, 4)
+            ]
+            keys = [f"voice-{i}" for i in range(1, 4)]
+            wavs = {str(row["id"]): root / f"{keys[row['id'] - 1]}.wav" for row in rows}
+            for wav in wavs.values():
+                wav.write_bytes(b"wav")
+            index = root / "parts.json"
+            index.write_text(json.dumps([{
+                "n": 1, "start_id": "1", "end_id": "3",
+                "start": keys[0], "end": keys[-1], "sig": "old-signature",
+            }]), encoding="utf-8")
+            with patch.object(n, "PARTS_INDEX", index), \\
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \\
+                 patch.object(n, "PAUSE", {"para": 1000}), \\
+                 patch.object(n, "load_durations", return_value={}), \\
+                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \\
+                 patch.object(n, "duration_of", return_value=40.0):
+                with self.assertRaisesRegex(ValueError, "содержимое части изменилось"):
+                    n.plan_parts(rows, {}, 2.0)
+
     def test_invalid_speed_is_rejected_before_planning(self):
         import math
         for speed in (0, -1, float("inf"), float("nan")):
