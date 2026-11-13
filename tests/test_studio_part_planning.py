@@ -290,5 +290,82 @@ class CrossPartSynchronizationTests(unittest.TestCase):
 
 
 
+    def test_timeline_keeps_old_edition_anchors_if_book_reloads_during_processing(self):
+        import threading
+        import types
+
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.rows = [{"kind": "head", "chapter": 1, "ch_title": "Original Chapter", "text": "Chapter"}]
+        s.uids = ["original-heading.0"]
+        s._abs = {}
+        s.speed = 1.0
+        s.roles = {"roles": {"narrator": {"tempo": 1.0, "gain": 1.0}}}
+        s.rule_index = lambda: {}
+        s.eff = lambda i, ridx: {"pause": 0, "after": 0.0, "role": "narrator", "tempo": 1.0}
+        s.src = lambda i: {"path": Path("original.wav"), "kind": "draft", "role": "narrator"}
+        s.eq_for = lambda i: {}
+        s.proc_key = lambda i, eq, ef, sc: "same-audio-key"
+        s.asm_sig = lambda: "same-assembly"
+        observed = {}
+
+        def process(items, op=None, row_snapshots=None, roles_snapshot=None):
+            observed["row"] = dict(row_snapshots[0])
+            observed["roles"] = roles_snapshot["roles"]["narrator"]["tempo"]
+            # Simulate a concurrent edition reload after the expensive work has begun.
+            s.rows = [{"kind": "text", "chapter": 99, "ch_title": "Edited Chapter", "text": "Edited"}]
+            s.uids = ["edited-text.0"]
+            s.roles = {"roles": {"narrator": {"tempo": 1.4, "gain": 0.8}}}
+            return {"same-audio-key": [0.1, 0.2]}
+
+        s._proc_many = process
+        fake_np = types.SimpleNamespace(
+            zeros=lambda count, dtype=None: [0.0] * count,
+            concatenate=lambda arrays: [sample for array in arrays for sample in array],
+        )
+        fake_n = types.SimpleNamespace(
+            TEMPO_G=1.0,
+            PAUSE_SCALE=1.0,
+            PAUSE={"chapter_end": 0},
+        )
+
+        with patch.object(studio, "np", fake_np), patch.object(studio, "n", fake_n):
+            meta, audio = s.timeline(0, 0, True)
+
+        self.assertEqual("Original Chapter", observed["row"]["ch_title"])
+        self.assertEqual(1.0, observed["roles"])
+        self.assertEqual([["original-heading.0", 0.0, 0.0]], meta["segs"])
+        self.assertEqual([[0.0, "Original Chapter"]], meta["chapters"])
+        self.assertEqual([0.1, 0.2], audio)
+
+    def test_proc_many_passes_captured_row_and_roles_to_worker(self):
+        with tempfile.TemporaryDirectory() as td:
+            s = studio.Studio.__new__(studio.Studio)
+            s.cache_dir = Path(td)
+            s.threads = 1
+            s.rows = [{"text": "new edition"}]
+            s.roles = {"roles": {"narrator": {"tempo": 2.0}}}
+            source = Path(td) / "shared.wav"
+            captured = {}
+
+            def fake_proc(i, eq, ef, sc, key, row_snapshot=None, roles_snapshot=None):
+                captured["row"] = row_snapshot
+                captured["tempo"] = roles_snapshot["roles"]["narrator"]["tempo"]
+                return [1.0, 2.0]
+
+            s.proc = fake_proc
+            items = [(0, {"role": "narrator"}, {"path": source}, {}, "shared-key", 0)]
+            old_rows = {0: {"text": "captured old edition"}}
+            old_roles = {"roles": {"narrator": {"tempo": 1.25}}}
+
+            result = s._proc_many(items, row_snapshots=old_rows, roles_snapshot=old_roles)
+
+        self.assertEqual("captured old edition", captured["row"]["text"])
+        self.assertEqual(1.25, captured["tempo"])
+        self.assertEqual([1.0, 2.0], result["shared-key"])
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
