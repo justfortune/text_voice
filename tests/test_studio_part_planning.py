@@ -271,6 +271,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         s = studio.Studio.__new__(studio.Studio)
         s.lock = threading.RLock()
         s.rows = [{"kind": "text", "chapter": 1, "ch_title": "chapter"}]
+        s.roles = {"roles": {"narrator": {"tempo": 1.0, "gain": 1.0}}}
         s.uids = ["same-text.0"]
         s._abs = {}
         s.speed = 1.0
