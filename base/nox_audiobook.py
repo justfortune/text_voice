@@ -533,6 +533,9 @@ def _validate_edition_snapshot(snapshot: Path) -> dict:
             raise ValueError(f"неверная контрольная сумма файла: {rel}")
         if archived.stat().st_size != size or _file_sha256(archived) != digest:
             raise ValueError(f"контрольная сумма файла в архиве редакции не совпала: {rel}")
+    required = {"segments.csv", "roles.json"}
+    if not required.issubset({record.get("path") for record in records if isinstance(record, dict)}):
+        raise ValueError(f"архив редакции не содержит CSV и roles.json: {snapshot.name}")
     return manifest
 
 
@@ -644,27 +647,33 @@ def restore_edition(edition_id: str) -> dict:
 
 
 def _retire_snapshotted_parts(snapshot: Path):
-    """Clear old active part outputs only after verifying their immutable snapshot exists."""
+    """Clear active part outputs only after verifying every one is present in the immutable snapshot."""
     manifest = _validate_edition_snapshot(snapshot)
+    remove = []
     for record in manifest["files"]:
-        if not str(record["path"]).startswith("parts/"):
+        rel = record["path"]
+        if not rel.startswith("parts/"):
             continue
-        active = _edition_active_path(record["path"])
+        active = _edition_active_path(rel)
         if active.exists():
             if active.stat().st_size != record["size"] or _file_sha256(active) != record["sha256"]:
                 raise RuntimeError(f"файл части изменился после архивации, не удаляю его: {active.name}")
-            active.unlink()
+            remove.append(active)
     for record in manifest["outputs_kept_in_place"]:
         active = _edition_active_path(record["path"])
         if active.exists():
             if active.stat().st_size != record["size"] or _file_sha256(active) != record["sha256"]:
                 raise RuntimeError(f"готовое аудио изменилось после архивации, не удаляю его: {active.name}")
-            active.unlink()
-    if any(record["path"] == "parts.json" for record in manifest["files"]):
-        index_record = next(record for record in manifest["files"] if record["path"] == "parts.json")
-        if PARTS_INDEX.is_file() and _file_sha256(PARTS_INDEX) != index_record["sha256"]:
-            raise RuntimeError("work/parts.json изменился после архивации; активный индекс не сброшен")
+            remove.append(active)
+    index_record = next((record for record in manifest["files"] if record["path"] == "parts.json"), None)
+    if index_record and PARTS_INDEX.is_file() and _file_sha256(PARTS_INDEX) != index_record["sha256"]:
+        raise RuntimeError("work/parts.json изменился после архивации; активный индекс не сброшен")
+    for active in remove:
+        active.unlink()
+    if index_record:
         _write_parts_index_atomic([])
+
+
 
 
 def _atomic_write_segments(rows):
