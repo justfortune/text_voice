@@ -1536,7 +1536,7 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
         parts.append((start, len(rows) - 1, True))     # хвост книги — последняя часть, пусть и короче
     elif start < ready:
         parts.append((start, ready - 1, False))        # недособранная часть (ещё растёт)
-_atomic_write_text(DUR_CACHE, json.dumps(cache, ensure_ascii=False) + "\n")
+    _atomic_write_text(DUR_CACHE, json.dumps(cache, ensure_ascii=False) + "\n")
     return parts, ready, complete
 
 
