@@ -272,7 +272,7 @@ class BookEditionSnapshotTests(unittest.TestCase):
 
             self.assertEqual(old_csv, csv_path.read_text(encoding="utf-8"))
             self.assertEqual(old_roles, roles_path.read_text(encoding="utf-8"))
-            self.assertEqual([csv_path, roles_path], sorted(work.iterdir()))
+            self.assertEqual({"segments.csv", "roles.json"}, {item.name for item in work.iterdir()})
 
     def test_atomic_segments_write_failure_keeps_previous_file(self):
         with tempfile.TemporaryDirectory() as td:
