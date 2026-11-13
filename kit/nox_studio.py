@@ -5305,9 +5305,8 @@ class Studio:
     def proj_dir(self) -> Path:
         return self.dir / "projects"
 
-    def home_id(self) -> str:
-        """Метка этой папки студии. Проект с другой меткой сохранён в другом месте: его записи могут называться так же,
-        как здешние, и быть другими — при загрузке такие ложатся отдельно."""
+    def home_id(self, create: bool = True) -> str:
+        """Метка этой папки студии. create=False используется в предварительных проверках без записи на диск."""
         f = self.dir / "home.id"
         try:
             v = f.read_text(encoding="ascii").strip()
@@ -5315,6 +5314,8 @@ class Studio:
                 return v
         except (OSError, UnicodeError):
             pass
+        if not create:
+            return ""
         v = secrets.token_hex(8)
         write_atomic(f, v)
         return v
@@ -5812,7 +5813,8 @@ class Studio:
             return dict(ok=False, name=name, info=info, now=cur, proj=pc, compat=cp, audio={}, warn=[], busy="",
                         why=f"это проект другой книги («{m.get('title') or '?'}»): из {cp['total']} его правок в этой книге "
                             f"нашлись {cp['found']}. Сюда он не загружается.")
-        foreign = m.get("home") != self.home_id()
+        local_home = self.home_id(create=False)
+        foreign = not local_home or m.get("home") != local_home
         au = self._proj_audio_check(files, need, foreign=foreign)
         warn = []
         if not cp["same"] and cp["lost"]:
