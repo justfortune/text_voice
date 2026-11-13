@@ -240,6 +240,40 @@ class BookEditionSnapshotTests(unittest.TestCase):
             self.assertEqual(original_csv, csv_path.read_bytes())
             self.assertEqual(original_roles, roles_path.read_bytes())
 
+    def test_edition_publish_rolls_back_csv_when_roles_publish_fails(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            work = root / "work"
+            work.mkdir()
+            csv_path = work / "segments.csv"
+            roles_path = work / "roles.json"
+            old_csv = "previous complete edition"
+            old_roles = '{"roles":{"narrator":{"voice":"old"}}}'
+            csv_path.write_text(old_csv, encoding="utf-8")
+            roles_path.write_text(old_roles, encoding="utf-8")
+            rows = [{"id": 1, "chapter": 1, "ch_title": "A", "para": 0, "kind": "text",
+                     "speaker": "narrator", "conf": "high", "pause_before_ms": 0, "text": "new"}]
+            new_roles = {"roles": {"narrator": {"voice": "new"}}}
+            real_replace = os.replace
+
+            def fail_roles(src, dst):
+                if Path(dst) == roles_path:
+                    raise OSError("simulated roles publish failure")
+                return real_replace(src, dst)
+
+            with patch.object(n, "WORK", work), \
+                 patch.object(n, "CSV_PATH", csv_path), \
+                 patch.object(n, "ROLES_PATH", roles_path), \
+                 patch.object(n.os, "replace", side_effect=fail_roles):
+                with self.assertRaisesRegex(OSError, "roles publish failure"):
+                    n._atomic_write_edition(rows, new_roles)
+
+            self.assertEqual(old_csv, csv_path.read_text(encoding="utf-8"))
+            self.assertEqual(old_roles, roles_path.read_text(encoding="utf-8"))
+            self.assertEqual([csv_path, roles_path], sorted(work.iterdir()))
+
     def test_atomic_segments_write_failure_keeps_previous_file(self):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "segments.csv"
