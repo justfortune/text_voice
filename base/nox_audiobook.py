@@ -506,6 +506,48 @@ def _atomic_write_segments(rows):
             pass
 
 
+def _atomic_write_edition(rows, roles):
+    """Stage both edition inputs first; roll back CSV if publishing roles.json fails.
+
+    A hard process crash between the two replacements is recoverable from the immutable
+    edition snapshot created immediately before this call.
+    """
+    WORK.mkdir(parents=True, exist_ok=True)
+    stage = WORK / f".segment-publish-{os.getpid()}-{time.time_ns()}"
+    stage.mkdir()
+    staged_csv = stage / "segments.csv"
+    staged_roles = stage / "roles.json"
+    old_csv = stage / "segments.previous.csv"
+    had_csv = CSV_PATH.is_file()
+    try:
+        with open(staged_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
+            writer.writeheader()
+            writer.writerows(rows)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        _atomic_write_text(staged_roles, json.dumps(roles, ensure_ascii=False, indent=2) + "\n")
+        if had_csv:
+            shutil.copy2(CSV_PATH, old_csv)
+        os.replace(staged_csv, CSV_PATH)
+        try:
+            os.replace(staged_roles, ROLES_PATH)
+        except Exception:
+            if had_csv and old_csv.is_file():
+                os.replace(old_csv, CSV_PATH)
+            else:
+                try:
+                    CSV_PATH.unlink()
+                except OSError:
+                    pass
+            raise
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
 def segment(docx_paths, max_chars: int):
     # Uses the same process-shared guard as parts.json/build_parts: a book cannot be
     # resegmented while another process is freezing or publishing its part timeline.
@@ -630,12 +672,11 @@ def _segment_locked(docx_paths, max_chars: int):
             roles["roles"][who] = {"instruct": instr, "same_as": None, "count": n}
         else:
             roles["roles"][who]["count"] = n
-    # Archive old inputs before replacing them; publish each new file atomically.
+    # Archive old inputs before replacing them; publish the new CSV/roles pair transactionally.
     previous_edition = _snapshot_current_edition()
     if previous_edition:
         print(f"Предыдущая редакция сохранена: {previous_edition}")
-    _atomic_write_segments(rows)
-    _atomic_write_text(ROLES_PATH, json.dumps(roles, ensure_ascii=False, indent=2) + "\n")
+    _atomic_write_edition(rows, roles)
 
     # статистика
     conf_cnt = Counter(r["conf"] for r in rows if r["kind"] == "speech")
