@@ -491,9 +491,9 @@ def _edition_active_path(rel: str) -> Path:
         return ROLES_PATH
     if rel == "parts.json":
         return PARTS_INDEX
-    if re.fullmatch(r"parts/part_\\d+\\.times\\.tsv", rel):
+    if re.fullmatch(r"parts/part_\d+\.times\.tsv", rel):
         return PARTS / Path(rel).name
-    if re.fullmatch(r"parts/part_\\d+\\.(?:m4b|m4a|mp3)", rel):
+    if re.fullmatch(r"parts/part_\d+\.(?:m4b|m4a|mp3)", rel):
         return PARTS / Path(rel).name
     raise ValueError(f"недопустимый путь в архиве редакции: {rel!r}")
 
