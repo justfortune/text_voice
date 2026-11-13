@@ -103,7 +103,7 @@ class PipelinePartIndexCompatibilityTests(unittest.TestCase):
             ])
             # Simulate a surviving timeline map from an older book layout:
             # its row positions now point at b..c, not this part's a..b audio.
-            with patch.object(studio, "n", pipeline), \\
+            with patch.object(studio, "n", pipeline), \
                  patch.object(s, "_part_span", return_value=(1, 2)):
                 self.assertEqual([(0, 1)], s.pipeline_parts(0))
 
