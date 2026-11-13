@@ -1521,6 +1521,37 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
     return parts, ready, complete
 
 
+def _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed) -> str:
+    """Identity of the encoded part, not just its spoken text.
+
+    Existing M4B reuse also depends on chapter labels/pauses, voice assignments,
+    actual WAV revisions and the encoder configuration.
+    """
+    wavs = []
+    selected_rows = []
+    for row in rows[a:b + 1]:
+        wav = wav_for(row, roles)
+        try:
+            st = wav.stat()
+        except OSError as e:
+            raise ValueError(f"нет готового WAV для части: {wav.name}") from e
+        wavs.append([wav.name, st.st_size, st.st_mtime_ns])
+        selected_rows.append({field: row.get(field) for field in FIELDS})
+    payload = {
+        "schema": 1,
+        "rows": selected_rows,
+        "wav": wavs,
+        "roles": roles,
+        "title": title,
+        "author": author,
+        "bitrate": bitrate,
+        "format": fmt,
+        "speed": float(speed),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=False, speed=1.0):
     """Сериализует сборку частей между процессами: общие временные имена и индекс нельзя писать параллельно."""
     with _claim_guard(PARTS_INDEX):
@@ -1550,8 +1581,9 @@ def _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt="m4b",
             break
         part_keys = [wav_for(row, roles).stem for row in rows[a:b + 1]]
         part_sig = hashlib.sha256("\n".join(part_keys).encode("utf-8")).hexdigest()
+        build_sig = _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed)
         record = {"n": n, "start_id": str(rows[a]["id"]), "end_id": str(rows[b]["id"]),
-                  "start": part_keys[0], "end": part_keys[-1], "sig": part_sig}
+                  "start": part_keys[0], "end": part_keys[-1], "sig": part_sig, "build_sig": build_sig}
         if out.exists():
             if n > len(saved_index) or not saved_index[n - 1].get("sig"):
                 raise ValueError(f"{out.name} уже существует, но work/parts.json не подтверждает содержимое "
@@ -1559,11 +1591,21 @@ def _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt="m4b",
                                  "сохраните копию старых частей и индекса перед восстановлением.")
             if saved_index[n - 1].get("sig") != part_sig:
                 raise ValueError(f"{out.name} не соответствует подписи текущей части; старый файл сохранён")
+            old_build_sig = saved_index[n - 1].get("build_sig")
+            if not old_build_sig:
+                raise ValueError(f"{out.name} имеет старый индекс без подписи параметров сборки; нельзя подтвердить "
+                                 "скорость, кодек, главы и параметры голоса. Старый файл сохранён; сделайте копию "
+                                 "старой редакции и её частей перед явной пересборкой.")
+            if old_build_sig != build_sig:
+                raise ValueError(f"{out.name} собран с другими параметрами или данными WAV; старый файл сохранён")
             old_sha = saved_index[n - 1].get("output_sha256")
-            if old_sha and _file_sha256(out) != old_sha:
+            if not old_sha:
+                raise ValueError(f"{out.name} не имеет контрольной суммы в индексе; автоматический пропуск запрещён, "
+                                 "старый файл сохранён")
+            if _file_sha256(out) != old_sha:
                 raise ValueError(f"{out.name} изменён после сборки (контрольная сумма не совпадает); "
                                  "старый файл сохранён, автоматический пропуск запрещён")
-            record["output_sha256"] = old_sha or _file_sha256(out)
+            record["output_sha256"] = old_sha
             record["output_size"] = out.stat().st_size
             if n <= len(frozen):
                 frozen[n - 1] = record
