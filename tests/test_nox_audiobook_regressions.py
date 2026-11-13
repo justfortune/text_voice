@@ -221,6 +221,59 @@ class BookEditionSnapshotTests(unittest.TestCase):
                 "sha256": n._file_sha256(snapshot / "parts" / "part_01.m4b"),
             }], manifest["outputs_kept_in_place"])
 
+    def test_restore_edition_restores_rows_roles_time_map_and_audio(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as td:
+            work, parts, csv_path, roles_path, index_path = self._fixture(td)
+            with patch.object(n, "WORK", work), \
+                 patch.object(n, "PARTS", parts), \
+                 patch.object(n, "CSV_PATH", csv_path), \
+                 patch.object(n, "ROLES_PATH", roles_path), \
+                 patch.object(n, "PARTS_INDEX", index_path):
+                old_snapshot = n._snapshot_current_edition()
+                csv_path.write_text("id;chapter;text\n9;2;new edition\n", encoding="utf-8")
+                roles_path.write_text('{"roles":{"narrator":{"voice":"new"}}}', encoding="utf-8")
+                index_path.write_text("[]", encoding="utf-8")
+                (parts / "part_01.times.tsv").write_text("new time map", encoding="utf-8")
+                replacement = parts / "part_01.new"
+                replacement.write_bytes(b"new-edition-audio")
+                os.replace(replacement, parts / "part_01.m4b")
+
+                result = n.restore_edition(old_snapshot.name.removeprefix("edition_"))
+
+                self.assertTrue(result["restored"])
+                self.assertEqual(old_snapshot.name.removeprefix("edition_")[:20], result["edition_id"][:20])
+                self.assertIn("old edition", csv_path.read_text(encoding="utf-8"))
+                self.assertIn("original", roles_path.read_text(encoding="utf-8"))
+                self.assertEqual("1", json.loads(index_path.read_text(encoding="utf-8"))[0]["start_id"])
+                self.assertIn("old edition", (parts / "part_01.times.tsv").read_text(encoding="utf-8"))
+                self.assertEqual(b"previous-book-audio", (parts / "part_01.m4b").read_bytes())
+
+                editions = n.list_editions()
+
+            self.assertEqual(2, len(editions))
+            self.assertTrue(all(item.get("valid", True) for item in editions))
+
+    def test_retire_parts_keeps_verified_audio_and_maps_in_snapshot(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as td:
+            work, parts, csv_path, roles_path, index_path = self._fixture(td)
+            with patch.object(n, "WORK", work), \
+                 patch.object(n, "PARTS", parts), \
+                 patch.object(n, "CSV_PATH", csv_path), \
+                 patch.object(n, "ROLES_PATH", roles_path), \
+                 patch.object(n, "PARTS_INDEX", index_path):
+                snapshot = n._snapshot_current_edition()
+                n._retire_snapshotted_parts(snapshot)
+
+                self.assertFalse((parts / "part_01.times.tsv").exists())
+                self.assertFalse((parts / "part_01.m4b").exists())
+                self.assertEqual([], json.loads(index_path.read_text(encoding="utf-8")))
+                self.assertIn("old edition", (snapshot / "parts" / "part_01.times.tsv").read_text(encoding="utf-8"))
+                self.assertEqual(b"previous-book-audio", (snapshot / "parts" / "part_01.m4b").read_bytes())
+
     def test_corrupt_existing_edition_snapshot_stops_before_source_replacement(self):
         with tempfile.TemporaryDirectory() as td:
             work, parts, csv_path, roles_path, index_path = self._fixture(td)
