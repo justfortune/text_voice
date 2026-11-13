@@ -129,6 +129,21 @@ class PipelinePartIndexCompatibilityTests(unittest.TestCase):
 
 
 class CrossPartSynchronizationTests(unittest.TestCase):
+    def _clock_studio(self, root, rows):
+        import threading
+
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s._clock = (0.0, {})
+        s._clock_sig = None
+        s.rows = [{"id": str(i + 1), "text": text, "kind": "text"} for i, text in enumerate(rows)]
+        s.wavs = [Path(root) / f"voice-{i + 1}.wav" for i in range(len(rows))]
+        s.id2i = {str(i + 1): i for i in range(len(rows))}
+        s.src = lambda i: {"path": s.wavs[i]}
+        s.row_text = lambda i: s.rows[i]["text"]
+        s.eff = lambda i: {"role": "narrator"}
+        return s
+
     def test_book_clock_accumulates_time_maps_across_consecutive_parts(self):
         """A cue anchored in one part must retain its global position in the next part."""
         import types
@@ -143,9 +158,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
                 "00:00.0\t00:02.0\t2\tnarrator\tb\tsecond\t0.000\t2.000\n",
                 encoding="utf-8",
             )
-            s = studio.Studio.__new__(studio.Studio)
-            s._clock = (0.0, {})
-            s.id2i = {"1": 0, "2": 1}
+            s = self._clock_studio(parts, ["first", "second"])
 
             with patch.object(studio, "n", types.SimpleNamespace(PARTS=parts)):
                 clock = s.book_clock()
@@ -184,6 +197,94 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         self.assertEqual(0.5, result[0])
         self.assertEqual(2.0, result[1])
         self.assertTrue(result[3])
+
+
+    def test_book_clock_rejects_old_map_when_sequential_id_is_reused(self):
+        import types
+
+        with tempfile.TemporaryDirectory() as td:
+            parts = Path(td)
+            (parts / "part_01.times.tsv").write_text(
+                "00:00.0\\t00:01.0\\t1\\tnarrator\\old-voice\\old edition text\\t0.000\\t1.000\\n",
+                encoding="utf-8",
+            )
+            s = self._clock_studio(parts, ["new edition text"])
+            s.wavs[0] = parts / "new-voice.wav"
+
+            with patch.object(studio, "n", types.SimpleNamespace(PARTS=parts)):
+                clock = s.book_clock()
+
+        self.assertEqual({}, clock)
+
+    def test_book_clock_invalidates_cache_when_time_map_is_replaced(self):
+        import os
+        import types
+
+        with tempfile.TemporaryDirectory() as td:
+            parts = Path(td)
+            time_map = parts / "part_01.times.tsv"
+            line = "00:00.0\\t00:01.0\\t1\\tnarrator\\voice-1\\first\\t0.000\\t1.000\\n"
+            time_map.write_text(line, encoding="utf-8")
+            s = self._clock_studio(parts, ["first"])
+
+            with patch.object(studio, "n", types.SimpleNamespace(PARTS=parts)):
+                first = s.book_clock()
+                changed = line.replace("1.000", "2.000")
+                time_map.write_text(changed, encoding="utf-8")
+                st = time_map.stat()
+                os.utime(time_map, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+                second = s.book_clock()
+
+        self.assertEqual((0.0, 1.0), first[0])
+        self.assertEqual((0.0, 2.0), second[0])
+
+    def test_finite_sfx_continues_across_part_boundary_with_remaining_duration(self):
+        s = studio.Studio.__new__(studio.Studio)
+        s.idx_of = {"before": 0, "inside": 1}
+        s.cue_lead = lambda cue, i, a: 2.5
+        cue = {"uid": "before", "est": 5.0, "kind": "sfx", "loop": False}
+
+        result = s.cue_times(cue, {"inside": (0.0, 1.0)}, 1, 1, 3.0)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(0.0, result[0])
+        self.assertEqual(2.5, result[1])
+        self.assertAlmostEqual(2.5, result[2])
+        self.assertFalse(result[3])
+
+    def test_finite_sfx_that_finished_before_next_part_is_not_replayed(self):
+        s = studio.Studio.__new__(studio.Studio)
+        s.idx_of = {"before": 0, "inside": 1}
+        s.cue_lead = lambda cue, i, a: 6.0
+        cue = {"uid": "before", "est": 5.0, "kind": "sfx", "loop": False}
+
+        result = s.cue_times(cue, {"inside": (0.0, 1.0)}, 1, 1, 3.0)
+
+        self.assertIsNone(result)
+
+    def test_render_version_changes_when_uid_anchor_changes_even_if_audio_key_is_same(self):
+        import threading
+        import types
+
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.rows = [{"kind": "text", "chapter": 1, "ch_title": "chapter"}]
+        s.uids = ["same-text.0"]
+        s._abs = {}
+        s.rule_index = lambda: {}
+        s.eff = lambda i, ridx: {"pause": 100, "after": 0.0}
+        s.src = lambda i: {"path": Path("same-audio.wav")}
+        s.eq_for = lambda i: {}
+        s.proc_key = lambda i, eq, ef, sc: "shared-audio-key"
+        s.asm_sig = lambda: "same-assembly"
+
+        with patch.object(studio, "n", types.SimpleNamespace(TEMPO_G=1.0, PAUSE_SCALE=1.0)):
+            first = s.timeline(0, 0, False)[0]["ver"]
+            s.uids[0] = "same-text.1"
+            second = s.timeline(0, 0, False)[0]["ver"]
+
+        self.assertNotEqual(first, second)
+
 
 
 if __name__ == "__main__":
