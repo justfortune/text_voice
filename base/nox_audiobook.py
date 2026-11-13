@@ -540,7 +540,7 @@ def _validate_edition_snapshot(snapshot: Path) -> dict:
 
 
 def list_editions() -> list:
-    """Return valid immutable book-edition snapshots, newest name first."""
+    """Return verified immutable book-edition snapshots, newest capture first."""
     root = WORK / "editions"
     result = []
     if not root.is_dir():
@@ -560,6 +560,7 @@ def list_editions() -> list:
             })
         except (OSError, ValueError) as e:
             result.append({"id": snapshot.name.removeprefix("edition_"), "valid": False, "error": str(e)})
+    result.sort(key=lambda item: item.get("captured_at", ""), reverse=True)
     return result
 
 
