@@ -398,10 +398,11 @@ def _atomic_write_text(path: Path, text: str):
 
 
 def _snapshot_current_edition():
-    """Archive the current book definition and time maps before segment() replaces them.
+    """Archive the current book definition, time maps and exact part outputs before resegmentation.
 
-    Audio outputs are not copied: they remain in their existing parts/ directory and are
-    listed in the manifest. This keeps the snapshot small while preserving the old mapping.
+    Part audio is hard-linked into the immutable edition snapshot on the same volume (copy fallback).
+    This preserves old audio across the pipeline's atomic os.replace publication without normally
+    doubling multi-gigabyte audiobook files.
     """
     if not CSV_PATH.is_file() or not ROLES_PATH.is_file():
         return None
@@ -430,7 +431,7 @@ def _snapshot_current_edition():
             if (manifest.get("edition_id") != identity or manifest.get("files") != records
                     or manifest.get("outputs_kept_in_place") != outputs):
                 return False
-            for record in records:
+            for record in records + outputs:
                 file_path = snapshot / Path(record["path"])
                 if not file_path.is_file() or file_path.stat().st_size != record["size"] \
                         or _file_sha256(file_path) != record["sha256"]:
@@ -446,19 +447,34 @@ def _snapshot_current_edition():
 
     editions.mkdir(parents=True, exist_ok=True)
     tmp_dir = editions / f".edition_{identity[:20]}.{os.getpid()}.{time.time_ns()}.tmp"
+    audio_methods = []
     try:
         tmp_dir.mkdir()
         for record, (_, source) in zip(records, sources):
             destination = tmp_dir / Path(record["path"])
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+        for record in outputs:
+            source = PARTS / Path(record["path"]).name
+            destination = tmp_dir / Path(record["path"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, destination)
+                method = "hardlink"
+            except OSError:
+                shutil.copy2(source, destination)
+                method = "copy"
+            if destination.stat().st_size != record["size"] or _file_sha256(destination) != record["sha256"]:
+                raise RuntimeError(f"контрольная сумма сохранённой части не совпала: {source.name}")
+            audio_methods.append({"path": record["path"], "method": method})
         manifest = {
             "schema": 1,
             "edition_id": identity,
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "files": records,
             "outputs_kept_in_place": outputs,
-            "audio_copied": False,
+            "audio_preservation": audio_methods,
+            "audio_copied": any(x["method"] == "copy" for x in audio_methods),
         }
         _atomic_write_text(tmp_dir / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
         tmp_dir.rename(target)
