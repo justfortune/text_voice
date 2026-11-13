@@ -101,6 +101,19 @@ class ProjectAudioIdentityTests(unittest.TestCase):
 
         self.assertEqual([arc], conflicts)
 
+    def test_different_size_import_collision_is_also_reported(self):
+        local = self.root / "studio" / "imports" / "s000001_t002_original.wav"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(b"local-audio")
+        arc = "imports/s000001_t002_original.wav"
+        expected = b"project-audio-with-another-length"
+
+        conflicts = self.s._proj_asset_conflicts({
+            arc: [len(expected), hashlib.sha1(expected).hexdigest()]
+        })
+
+        self.assertEqual([arc], conflicts)
+
     def test_same_size_sound_with_matching_hash_is_not_a_conflict(self):
         local = self.root / "studio" / "sounds" / "door_12345678.wav"
         local.parent.mkdir(parents=True, exist_ok=True)
