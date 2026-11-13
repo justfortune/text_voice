@@ -1313,9 +1313,9 @@ def _write_parts_index_atomic(parts: list):
     PARTS_INDEX.parent.mkdir(parents=True, exist_ok=True)
     tmp = PARTS_INDEX.with_name(f"{PARTS_INDEX.name}.{os.getpid()}.{time.time_ns()}.tmp")
     try:
-        with open(tmp, "w", encoding="utf-8", newline="\\n") as f:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             json.dump(parts, f, ensure_ascii=False, indent=1)
-            f.write("\\n")
+            f.write("\n")
             f.flush()
             try:
                 os.fsync(f.fileno())
@@ -1344,10 +1344,6 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
     cache = load_durations()
     keys = [wav_for(r, roles).stem for r in rows]
     # WAV cache keys may repeat by design; book positions must instead use unique row IDs.
-    id_pos = {str(r["id"]): i for i, r in enumerate(rows)}
-    key_positions = {}
-    for i, key in enumerate(keys):
-        key_positions.setdefault(key, []).append(i)
     frozen = []
     id_pos = {str(r["id"]): i for i, r in enumerate(rows)}
     if len(id_pos) != len(rows):
@@ -1379,7 +1375,7 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
                              "пересборку поверх них, пока не сохраните отдельную копию старой редакции.")
         saved_sig = p.get("sig")
         if saved_sig:
-            current_sig = hashlib.sha256("\\n".join(keys[a:b + 1]).encode("utf-8")).hexdigest()
+            current_sig = hashlib.sha256("\n".join(keys[a:b + 1]).encode("utf-8")).hexdigest()
             if saved_sig != current_sig:
                 raise ValueError("содержимое части изменилось после сборки (work/parts.json): "
                                  "сохраните старую редакцию и её аудио отдельно перед пересборкой.")
@@ -1428,7 +1424,7 @@ def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=F
                 raise ValueError(f"{out.name} существует для ещё не завершённой части; файл сохранён")
             break
         part_keys = [wav_for(row, roles).stem for row in rows[a:b + 1]]
-        part_sig = hashlib.sha256("\\n".join(part_keys).encode("utf-8")).hexdigest()
+        part_sig = hashlib.sha256("\n".join(part_keys).encode("utf-8")).hexdigest()
         record = {"n": n, "start_id": str(rows[a]["id"]), "end_id": str(rows[b]["id"]),
                   "start": part_keys[0], "end": part_keys[-1], "sig": part_sig}
         if out.exists():
