@@ -215,6 +215,63 @@ class PartsIndexRecoveryTests(unittest.TestCase):
             self.assertEqual(b"old-edition-audio", orphan.read_bytes())
             self.assertFalse(index.exists())
 
+    def test_rebuilding_early_part_does_not_truncate_validated_index_suffix(self):
+        import hashlib
+        import json
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parts = root / "parts"
+            parts.mkdir()
+            index = root / "work" / "parts.json"
+            wavs = [root / "voice-1.wav", root / "voice-2.wav"]
+            for wav in wavs:
+                wav.write_bytes(b"wav")
+            rows = [
+                {"id": i + 1, "speaker": "narrator", "text": f"line-{i + 1}",
+                 "pause_before_ms": 0, "kind": "text", "ch_title": "Chapter"}
+                for i in range(2)
+            ]
+            keys = [wav.stem for wav in wavs]
+            signatures = [
+                hashlib.sha256(key.encode("utf-8")).hexdigest()
+                for key in keys
+            ]
+            part_two = parts / "part_02.m4b"
+            part_two.write_bytes(b"second-edition-audio")
+            saved = [
+                {"n": i + 1, "start_id": str(i + 1), "end_id": str(i + 1),
+                 "start": keys[i], "end": keys[i], "sig": signatures[i],
+                 "output_sha256": ("0" * 64 if i == 1 else None)}
+                for i in range(2)
+            ]
+            index.parent.mkdir(parents=True)
+            index.write_text(json.dumps(saved), encoding="utf-8")
+
+            def encode(_audio, _sr, _chapters, out, *_args, **_kwargs):
+                out.write_bytes(b"rebuilt-first-part")
+                return 60.0
+
+            with patch.object(n, "PARTS", parts), \
+                 patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "PAUSE", {"para": 1000}), \
+                 patch.object(n, "wav_for", side_effect=lambda row, _roles: wavs[int(row["id"]) - 1]), \
+                 patch.object(n, "duration_of", return_value=120.0), \
+                 patch.object(n, "assemble", return_value=(None, 24000, [], None)), \
+                 patch.object(n, "encode_m4b", side_effect=encode):
+                with self.assertRaisesRegex(ValueError, "контрольная сумма не совпадает"):
+                    n.build_parts(rows, {}, 2.0, "Book", "Author", "96k", quiet=True)
+
+            persisted = json.loads(index.read_text(encoding="utf-8"))
+            self.assertEqual(2, len(persisted))
+            self.assertEqual(signatures[1], persisted[1]["sig"])
+            self.assertEqual("0" * 64, persisted[1]["output_sha256"])
+            self.assertTrue((parts / "part_01.m4b").is_file())
+            self.assertEqual(b"second-edition-audio", part_two.read_bytes())
+
+
     def test_part_output_checksum_mismatch_is_not_silently_accepted(self):
         import json
         with tempfile.TemporaryDirectory() as td:
