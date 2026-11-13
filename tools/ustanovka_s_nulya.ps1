@@ -19,7 +19,7 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:HF_HUB_DISABLE_SYML
 $RepoDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)      # папка репозитория (над tools)
 if (-not $Downloads) { $Downloads = Join-Path $env:USERPROFILE "Downloads" }
 $TORCH_VER = "2.11.0"; $TORCH_INDEX = "https://download.pytorch.org/whl/cu128"; $DRIVER_MIN = 570
-$BASE_SHA = "4844E7C3AB344B702EA403DA08E4F1E346030CDA"
+$BASE_SHA = "2EAAAA271AD965AA4BE890F033E31D0F8A112D75"
 $PY_URL = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
 $FF_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
 $script:did = 0; $script:skipped = 0
@@ -115,8 +115,8 @@ try {
             $condaExe = $env:CONDA_EXE
             if (-not $condaExe) {
                 foreach ($c in @("$env:USERPROFILE\anaconda3\Scripts\conda.exe", "$env:USERPROFILE\miniconda3\Scripts\conda.exe", "$env:LOCALAPPDATA\anaconda3\Scripts\conda.exe",
-                                 "$env:LOCALAPPDATA\miniconda3\Scripts\conda.exe", "$env:ProgramData\anaconda3\Scripts\conda.exe", "$env:ProgramData\miniconda3\Scripts\conda.exe",
-                                 "C:\anaconda3\Scripts\conda.exe", "C:\miniconda3\Scripts\conda.exe")) { if (Test-Path -LiteralPath $c) { $condaExe = $c; break } }
+                                 "$env:LOCALAPPDATA\miniconda3\Scripts\conda.exe", "$env:ProgramData\anaconda3\Scripts\conda.exe",
+                                 "$env:ProgramData\miniconda3\Scripts\conda.exe", "C:\anaconda3\Scripts\conda.exe", "C:\miniconda3\Scripts\conda.exe")) { if (Test-Path -LiteralPath $c) { $condaExe = $c; break } }
             }
             if ($condaExe) {
                 Say "  conda найдена: окружение Python 3.12 (так стоит на рабочей машине)"
