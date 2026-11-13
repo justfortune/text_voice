@@ -6647,6 +6647,11 @@ class Studio:
         run = time.time() - self._auto_t0 if self._auto_t0 else 0.0
         made = lk - self._auto_rows0
         eta = round(run / made * (total - lk)) if (self._auto_t0 and made > 0 and run > 120) else None
+        parts_done = bool(pl) and pl[-1]["b"] >= len(self.rows) - 1 and all(
+            p["opened"] and self.store["parts"][p["n"] - 1].get("locked") for p in pl)
+        # Полная книга считается готовой только после проверки конечных файлов глав.
+        # Иначе повторный запуск ошибочно блокируется, хотя экспорт главы мог не состояться.
+        chapters_pending = self.chapters_due() if parts_done else []
         return dict(state=a["state"], step=a.get("step") or "", part=int(a.get("part") or 0), err=a.get("err") or "",
                     sound=bool(a.get("sound", True)), pct=round(100 * lk / total, 1),
                     locked=sum(1 for p in pl if p["opened"] and self.store["parts"][p["n"] - 1].get("locked")),
@@ -6656,8 +6661,7 @@ class Studio:
                     kit=self.kit_score() is not None, since=a.get("since") or "", ch_busy=self.ch_busy,
                     stamp=a.get("stamp") or "", disk=self.disk_dir(False),
                     vars=[dict(id=v[0], name=v[3], on=bool((self.store["mix"].get("vars") or {}).get(v[0], True))) for v in MIX_VARS],
-                    done=bool(pl) and pl[-1]["b"] >= len(self.rows) - 1 and all(
-                        p["opened"] and self.store["parts"][p["n"] - 1].get("locked") for p in pl))
+                    done=parts_done and not chapters_pending)
 
     def _auto_set(self, say=True, **kw):
         with self.lock:
@@ -6789,7 +6793,20 @@ class Studio:
             return True
         if whole:
             self._auto_chapters(final=True)
+            # Не превращаем явную паузу в завершение, если автор остановил автомат во время
+            # последней сборки глав.
+            if not self.auto_on():
+                return False
+            pending_chapters = self.chapters_due()
+            if pending_chapters:
+                labels = ", ".join(map(str, pending_chapters[:20]))
+                if len(pending_chapters) > 20:
+                    labels += "…"
+                raise Oops("все части озвучены и закреплены, но главы не собраны или устарели: "
+                           + labels + ". Проверьте журнал и после устранения причины нажмите «Вся книга» → «Продолжить»")
             k = self.disk_sync()
+            if not self.auto_on():
+                return False
             if k:
                 log(f"на Яндекс Диск досланы готовые файлы: {k}", "ok", "книга")
             with self.lock:
