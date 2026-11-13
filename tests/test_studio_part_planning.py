@@ -129,3 +129,61 @@ class PipelinePartIndexCompatibilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CrossPartSynchronizationTests(unittest.TestCase):
+    def test_book_clock_accumulates_time_maps_across_consecutive_parts(self):
+        """A cue anchored in one part must retain its global position in the next part."""
+        import types
+
+        with tempfile.TemporaryDirectory() as td:
+            parts = Path(td)
+            (parts / "part_01.times.tsv").write_text(
+                "00:00.0\t00:01.0\t1\tnarrator\ta\tfirst\t0.000\t1.000\n",
+                encoding="utf-8",
+            )
+            (parts / "part_02.times.tsv").write_text(
+                "00:00.0\t00:02.0\t2\tnarrator\tb\tsecond\t0.000\t2.000\n",
+                encoding="utf-8",
+            )
+            s = studio.Studio.__new__(studio.Studio)
+            s._clock = (0.0, {})
+            s.id2i = {"1": 0, "2": 1}
+
+            with patch.object(studio, "n", types.SimpleNamespace(PARTS=parts)):
+                clock = s.book_clock()
+
+        self.assertEqual((0.0, 1.0), clock[0])
+        # The established inter-part gap is one second, not a reset to time zero.
+        self.assertEqual((2.0, 4.0), clock[1])
+
+    def test_cue_anchored_before_part_is_continued_when_end_anchor_is_inside(self):
+        """A cue spanning a part boundary starts at local zero and carries its elapsed offset."""
+        s = studio.Studio.__new__(studio.Studio)
+        s.idx_of = {"before": 0, "inside": 1, "end": 2}
+        s.cue_lead = lambda cue, i, a: 0.75
+        cue = {"uid": "before", "e_uid": "end", "at": "s", "off": 0.0}
+        current_segments = {"inside": (0.0, 1.0), "end": (1.0, 2.0)}
+
+        result = s.cue_times(cue, current_segments, 1, 2, 3.0)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(0.0, result[0])
+        self.assertEqual(2.0, result[1])
+        self.assertAlmostEqual(0.75, result[2])
+        self.assertFalse(result[3])
+
+    def test_cue_ending_after_part_is_marked_cut_not_dropped(self):
+        """A cue that crosses the right edge remains present and is faded at the part boundary."""
+        s = studio.Studio.__new__(studio.Studio)
+        s.idx_of = {"start": 0, "inside": 1, "after": 2}
+        s.cue_lead = lambda cue, i, a: 0.0
+        cue = {"uid": "inside", "e_uid": "after", "at": "s", "off": 0.0, "e_at": "e", "e_off": 0.0}
+        current_segments = {"inside": (0.5, 1.5)}
+
+        result = s.cue_times(cue, current_segments, 0, 1, 2.0)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(0.5, result[0])
+        self.assertEqual(2.0, result[1])
+        self.assertTrue(result[3])
