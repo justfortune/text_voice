@@ -1281,6 +1281,62 @@ def part_source_seconds(minutes: float, speed: float = 1.0) -> float:
     return minutes * 60.0 * speed
 
 
+def _read_parts_index() -> list:
+    """Read the saved part index without silently treating damage as an empty/new edition."""
+    try:
+        raw = PARTS_INDEX.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeError) as e:
+        raise ValueError(f"не удаётся прочитать work/parts.json: {e}; старые части не изменены") from e
+    try:
+        saved = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError("work/parts.json повреждён: индекс частей не будет сброшен автоматически; "
+                         "сохраните копию файла и готовых частей перед восстановлением") from e
+    if not isinstance(saved, list):
+        raise ValueError("work/parts.json имеет неизвестную структуру: ожидался список частей; "
+                         "старые файлы сохранены")
+    for i, part in enumerate(saved, 1):
+        if not isinstance(part, dict) or not isinstance(part.get("start"), str) or not part["start"] \
+                or not isinstance(part.get("end"), str) or not part["end"]:
+            raise ValueError(f"work/parts.json: запись части {i} неполная; автоматическая перестройка остановлена")
+        if ("start_id" in part) != ("end_id" in part):
+            raise ValueError(f"work/parts.json: у части {i} задана только одна граница ID; индекс сохранён")
+        if "sig" in part and part["sig"] and not isinstance(part["sig"], str):
+            raise ValueError(f"work/parts.json: неверная подпись содержимого части {i}; индекс сохранён")
+    return saved
+
+
+def _write_parts_index_atomic(parts: list):
+    """Publish the part index only after a complete JSON file has reached disk."""
+    PARTS_INDEX.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PARTS_INDEX.with_name(f"{PARTS_INDEX.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\\n") as f:
+            json.dump(parts, f, ensure_ascii=False, indent=1)
+            f.write("\\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, PARTS_INDEX)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
     """-> (parts, ready, complete). Существующие границы частей остаются замороженными.
     Новая граница рассчитывается по длительности исходного звука с учётом скорости финального atempo."""
@@ -1293,47 +1349,41 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
     for i, key in enumerate(keys):
         key_positions.setdefault(key, []).append(i)
     frozen = []
-    legacy_ambiguous = False
-    try:
-        saved = json.loads(PARTS_INDEX.read_text(encoding="utf-8"))
-        for p in saved:
-            if "start_id" in p and "end_id" in p:
-                a, b = id_pos.get(str(p["start_id"])), id_pos.get(str(p["end_id"]))
-            else:
-                # Старый индекс по WAV-хешу неоднозначен при повторяющихся репликах.
-                # Мигрируем его только если обе границы встречаются ровно один раз.
-                starts = key_positions.get(p.get("start"), [])
-                ends = key_positions.get(p.get("end"), [])
-                if len(starts) != 1 or len(ends) != 1:
-                    legacy_ambiguous = True
-                    break
-                a, b = starts[0], ends[0]
-            if a is None or b is None or b < a or (frozen and a != frozen[-1][1] + 1) or (not frozen and a != 0):
-                if "start_id" in p and "end_id" in p:
-                    raise ValueError("work/parts.json относится к другой редакции книги: сохранённые границы "
-                                     "больше не находятся в текущей разбивке. Старые части и индекс сохранены.")
-                break
-            if keys[a] != p.get("start") or keys[b] != p.get("end"):
-                raise ValueError("work/parts.json относится к другой редакции книги: границы частей больше не "
-                                 "совпадают с аудио текущих реплик. Старые части и индекс сохранены; не запускайте "
-                                 "пересборку поверх них, пока не сохраните отдельную копию старой редакции.")
-            saved_sig = p.get("sig")
-            if saved_sig:
-                current_sig = hashlib.sha256("\n".join(keys[a:b + 1]).encode("utf-8")).hexdigest()
-                if saved_sig != current_sig:
-                    raise ValueError("содержимое части изменилось после сборки (work/parts.json): "
-                                     "сохраните старую редакцию и её аудио отдельно перед пересборкой.")
-            frozen.append((a, b))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        frozen = []
-    except ValueError:
-        raise
-    except Exception:
-        frozen = []
-    if legacy_ambiguous:
-        raise ValueError("work/parts.json содержит старые неоднозначные границы (повторяющиеся реплики). "
-                         "Автоматическая миграция остановлена, чтобы не перепутать части; сохраните старый индекс "
-                         "и готовые файлы частей перед ручной перестройкой.")
+    id_pos = {str(r["id"]): i for i, r in enumerate(rows)}
+    if len(id_pos) != len(rows):
+        raise ValueError("в segments.csv повторяются ID сегментов: невозможно безопасно привязать части")
+    key_positions = {}
+    for i, key in enumerate(keys):
+        key_positions.setdefault(key, []).append(i)
+    saved = _read_parts_index()
+    for part_no, p in enumerate(saved, 1):
+        if "n" in p and str(p["n"]) != str(part_no):
+            raise ValueError(f"work/parts.json: нарушена последовательность номеров частей у записи {part_no}")
+        if "start_id" in p and "end_id" in p:
+            a, b = id_pos.get(str(p["start_id"])), id_pos.get(str(p["end_id"]))
+        else:
+            # Старый индекс по WAV-хешу неоднозначен при повторяющихся репликах.
+            starts = key_positions.get(p.get("start"), [])
+            ends = key_positions.get(p.get("end"), [])
+            if len(starts) != 1 or len(ends) != 1:
+                raise ValueError("work/parts.json содержит старые неоднозначные границы (повторяющиеся реплики). "
+                                 "Автоматическая миграция остановлена, чтобы не перепутать части; сохраните старый индекс "
+                                 "и готовые файлы частей перед ручной перестройкой.")
+            a, b = starts[0], ends[0]
+        if a is None or b is None or b < a or (frozen and a != frozen[-1][1] + 1) or (not frozen and a != 0):
+            raise ValueError("work/parts.json относится к другой редакции книги: сохранённые границы "
+                             "больше не находятся в текущей разбивке. Старые части и индекс сохранены.")
+        if keys[a] != p.get("start") or keys[b] != p.get("end"):
+            raise ValueError("work/parts.json относится к другой редакции книги: границы частей больше не "
+                             "совпадают с аудио текущих реплик. Старые части и индекс сохранены; не запускайте "
+                             "пересборку поверх них, пока не сохраните отдельную копию старой редакции.")
+        saved_sig = p.get("sig")
+        if saved_sig:
+            current_sig = hashlib.sha256("\\n".join(keys[a:b + 1]).encode("utf-8")).hexdigest()
+            if saved_sig != current_sig:
+                raise ValueError("содержимое части изменилось после сборки (work/parts.json): "
+                                 "сохраните старую редакцию и её аудио отдельно перед пересборкой.")
+        frozen.append((a, b))
     # сколько сегментов готово подряд с начала книги
     ready = 0
     while ready < len(rows) and wav_for(rows[ready], roles).exists():
@@ -1359,29 +1409,58 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
 
 
 def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=False, speed=1.0):
-    """Собирает все закрытые части, которых ещё нет в parts/. -> список новых файлов."""
+    """Собирает все закрытые части; существующий файл пропускается только при совпадении индекса и подписи."""
+    saved_index = _read_parts_index()
     parts, ready, complete = plan_parts(rows, roles, minutes, speed=speed)
     PARTS.mkdir(exist_ok=True)
     new_files = []
     frozen = []
+    planned_count = len(parts)
+    for existing in PARTS.glob(f"part_*.{fmt}"):
+        match = re.fullmatch(rf"part_(\d+)\.{re.escape(fmt)}", existing.name)
+        if match and int(match.group(1)) > planned_count:
+            raise ValueError(f"найден старый файл {existing.name}, которого нет в текущем плане частей; "
+                             "он сохранён, автоматическая синхронизация остановлена")
     for n, (a, b, closed) in enumerate(parts, 1):
+        out = PARTS / f"part_{n:02d}.{fmt}"
         if not closed:
+            if out.exists():
+                raise ValueError(f"{out.name} существует для ещё не завершённой части; файл сохранён")
             break
         part_keys = [wav_for(row, roles).stem for row in rows[a:b + 1]]
-        part_sig = hashlib.sha256("\n".join(part_keys).encode("utf-8")).hexdigest()
-        frozen.append({"n": n, "start_id": str(rows[a]["id"]), "end_id": str(rows[b]["id"]),
-                       "start": part_keys[0], "end": part_keys[-1], "sig": part_sig})
-        out = PARTS / f"part_{n:02d}.{fmt}"
+        part_sig = hashlib.sha256("\\n".join(part_keys).encode("utf-8")).hexdigest()
+        record = {"n": n, "start_id": str(rows[a]["id"]), "end_id": str(rows[b]["id"]),
+                  "start": part_keys[0], "end": part_keys[-1], "sig": part_sig}
         if out.exists():
+            if n > len(saved_index) or not saved_index[n - 1].get("sig"):
+                raise ValueError(f"{out.name} уже существует, но work/parts.json не подтверждает содержимое "
+                                 "этой части. Старый файл не перезаписан и не принят за новую редакцию; "
+                                 "сохраните копию старых частей и индекса перед восстановлением.")
+            if saved_index[n - 1].get("sig") != part_sig:
+                raise ValueError(f"{out.name} не соответствует подписи текущей части; старый файл сохранён")
+            old_sha = saved_index[n - 1].get("output_sha256")
+            if old_sha and _file_sha256(out) != old_sha:
+                raise ValueError(f"{out.name} изменён после сборки (контрольная сумма не совпадает); "
+                                 "старый файл сохранён, автоматический пропуск запрещён")
+            record["output_sha256"] = old_sha or _file_sha256(out)
+            record["output_size"] = out.stat().st_size
+            frozen.append(record)
             continue
+
         audio, sr, chapters, _ = assemble(rows[a:b + 1], roles, head_pause=False)
         ch_name = rows[a]["ch_title"]
         total = encode_m4b(audio, sr, chapters, out, f"{title} — часть {n:02d} ({ch_name})", author, bitrate,
                            speed=speed)
+        if not out.is_file() or out.stat().st_size <= 0:
+            raise RuntimeError(f"кодировщик не создал готовый файл части: {out.name}")
+        record["output_sha256"] = _file_sha256(out)
+        record["output_size"] = out.stat().st_size
+        frozen.append(record)
+        _write_parts_index_atomic(frozen)
         new_files.append(out)
         if not quiet:
             print(f"[parts] {out.name}  {total / 60:5.1f} мин  с «{ch_name}»")
-    PARTS_INDEX.write_text(json.dumps(frozen, ensure_ascii=False, indent=1), encoding="utf-8")
+    _write_parts_index_atomic(frozen)
     if not quiet:
         print(f"готово сегментов подряд с начала: {ready}/{len(rows)}; частей собрано: {len(frozen)}"
               + (" — книга целиком озвучена" if complete else ""))
