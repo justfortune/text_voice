@@ -99,6 +99,31 @@ class PartDurationPlanningTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "другой редакции"):
                     n.plan_parts(rows, {}, 2.0)
 
+    def test_missing_frozen_row_ids_are_not_silently_replanned(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rows = [
+                {"id": i + 10, "text": f"new-{i}", "pause_before_ms": 1000, "kind": "text"}
+                for i in range(1, 5)
+            ]
+            wavs = {str(row["id"]): root / f"new-{row['id']}.wav" for row in rows}
+            for wav in wavs.values():
+                wav.write_bytes(b"wav")
+            index = root / "parts.json"
+            index.write_text(json.dumps([{
+                "n": 1, "start_id": "1", "end_id": "2",
+                "start": "old-1", "end": "old-2",
+            }]), encoding="utf-8")
+            with patch.object(n, "PARTS_INDEX", index), \\
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \\
+                 patch.object(n, "PAUSE", {"para": 1000}), \\
+                 patch.object(n, "load_durations", return_value={}), \\
+                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \\
+                 patch.object(n, "duration_of", return_value=40.0):
+                with self.assertRaisesRegex(ValueError, "другой редакции"):
+                    n.plan_parts(rows, {}, 2.0)
+
     def test_frozen_part_signature_detects_middle_segment_edits(self):
         import json
         with tempfile.TemporaryDirectory() as td:
