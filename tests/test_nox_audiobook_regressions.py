@@ -159,6 +159,93 @@ class PartDurationPlanningTests(unittest.TestCase):
                     n.plan_parts([], {}, 2.0, speed=speed)
 
 
+class BookEditionSnapshotTests(unittest.TestCase):
+    def _fixture(self, root):
+        work = Path(root) / "work"
+        parts = Path(root) / "parts"
+        work.mkdir()
+        parts.mkdir()
+        csv_path = work / "segments.csv"
+        roles_path = work / "roles.json"
+        index_path = work / "parts.json"
+        csv_path.write_text("id;chapter;text\n1;1;old edition\n", encoding="utf-8")
+        roles_path.write_text('{"roles":{"narrator":{"voice":"original"}}}', encoding="utf-8")
+        index_path.write_text('[{"n":1,"start_id":"1","end_id":"1","start":"a","end":"a"}]', encoding="utf-8")
+        (parts / "part_01.times.tsv").write_text(
+            "00:00.0\t00:02.0\t1\tnarrator\ta\told edition\t0.000\t2.000\n",
+            encoding="utf-8",
+        )
+        (parts / "part_01.m4b").write_bytes(b"previous-book-audio")
+        return work, parts, csv_path, roles_path, index_path
+
+    def test_previous_edition_snapshot_preserves_csv_roles_index_and_time_maps(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as td:
+            work, parts, csv_path, roles_path, index_path = self._fixture(td)
+            with patch.object(n, "WORK", work), \
+                 patch.object(n, "PARTS", parts), \
+                 patch.object(n, "CSV_PATH", csv_path), \
+                 patch.object(n, "ROLES_PATH", roles_path), \
+                 patch.object(n, "PARTS_INDEX", index_path):
+                snapshot = n._snapshot_current_edition()
+                original_csv = (snapshot / "segments.csv").read_text(encoding="utf-8")
+                original_roles = (snapshot / "roles.json").read_text(encoding="utf-8")
+                original_index = (snapshot / "parts.json").read_text(encoding="utf-8")
+                original_map = (snapshot / "parts" / "part_01.times.tsv").read_text(encoding="utf-8")
+                manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+
+                csv_path.write_text("id;chapter;text\n9;2;edited edition\n", encoding="utf-8")
+                roles_path.write_text('{"roles":{"narrator":{"voice":"new"}}}', encoding="utf-8")
+                index_path.write_text("[]", encoding="utf-8")
+                (parts / "part_01.times.tsv").write_text("changed map", encoding="utf-8")
+
+                second = n._snapshot_current_edition()
+
+            self.assertEqual(snapshot, second)
+            self.assertIn("old edition", original_csv)
+            self.assertIn("original", original_roles)
+            self.assertIn('"start_id": "1"', original_index)
+            self.assertIn("old edition", original_map)
+            self.assertEqual("previous-book-audio", (parts / "part_01.m4b").read_bytes())
+            self.assertEqual(False, manifest["audio_copied"])
+            self.assertEqual([{"path": "parts/part_01.m4b", "size": len(b"previous-book-audio")}],
+                             manifest["outputs_kept_in_place"])
+
+    def test_corrupt_existing_edition_snapshot_stops_before_source_replacement(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, parts, csv_path, roles_path, index_path = self._fixture(td)
+            with patch.object(n, "WORK", work), \
+                 patch.object(n, "PARTS", parts), \
+                 patch.object(n, "CSV_PATH", csv_path), \
+                 patch.object(n, "ROLES_PATH", roles_path), \
+                 patch.object(n, "PARTS_INDEX", index_path):
+                snapshot = n._snapshot_current_edition()
+                (snapshot / "segments.csv").write_text("damaged snapshot", encoding="utf-8")
+                original_csv = csv_path.read_bytes()
+                original_roles = roles_path.read_bytes()
+
+                with self.assertRaisesRegex(RuntimeError, "архив прежней редакции повреждён"):
+                    n._snapshot_current_edition()
+
+            self.assertEqual(original_csv, csv_path.read_bytes())
+            self.assertEqual(original_roles, roles_path.read_bytes())
+
+    def test_atomic_segments_write_failure_keeps_previous_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "segments.csv"
+            target.write_text("previous complete edition", encoding="utf-8")
+            rows = [{"id": 1, "chapter": 1, "ch_title": "A", "para": 0, "kind": "text",
+                     "speaker": "narrator", "conf": "high", "pause_before_ms": 0, "text": "new"}]
+
+            with patch.object(n, "CSV_PATH", target), patch.object(n.os, "replace", side_effect=OSError("simulated")):
+                with self.assertRaisesRegex(OSError, "simulated"):
+                    n._atomic_write_segments(rows)
+
+            self.assertEqual("previous complete edition", target.read_text(encoding="utf-8"))
+            self.assertEqual([target], list(Path(td).iterdir()))
+
+
 class PartsIndexRecoveryTests(unittest.TestCase):
     def test_corrupt_parts_index_is_preserved_and_never_treated_as_empty(self):
         with tempfile.TemporaryDirectory() as td:
