@@ -3696,7 +3696,7 @@ class Studio:
                 for ln in lines:
                     if not ln.strip():
                         continue
-                    c = ln.split("\\t")
+                    c = ln.split("\t")
                     if len(c) < 8:
                         invalid = True
                         break
