@@ -1520,8 +1520,16 @@ class Studio:
         частей: так часть находится точно, даже когда её последняя фраза («— Да.») встречается в книге много раз
         (у одинаковых фраз одной роли запись общая, по записи их не различить). Карты нет — по записям начала и конца."""
         out, idx = [], read_json(n.PARTS_INDEX, []) or []
+
+        def valid_entry(entry):
+            # Current build_parts() writes stable row-ID and WAV-boundary fields, not the
+            # historical "sig" marker. Accept both formats; reject incomplete records.
+            return (isinstance(entry, dict) and bool(entry.get("start")) and bool(entry.get("end"))
+                    and (bool(entry.get("sig")) or
+                         (entry.get("start_id") is not None and entry.get("end_id") is not None)))
+
         for q, p in enumerate(idx):
-            if not p.get("sig"):
+            if not valid_entry(p):
                 break
             a = start if not out else out[-1][1] + 1
             if a >= len(self.rows):
@@ -1539,7 +1547,7 @@ class Studio:
                 if out:
                     break
                 continue                                   # часть до нашей границы — пропускаем
-            nxt = idx[q + 1].get("start") if q + 1 < len(idx) and idx[q + 1].get("sig") else None
+            nxt = (idx[q + 1].get("start") if q + 1 < len(idx) and valid_entry(idx[q + 1]) else None)
             cand = [j for j in range(a, min(a + 4000, len(self.rows))) if self.wavs[j].stem == p.get("end")]
             b = next((j for j in cand if nxt is not None and j + 1 < len(self.rows) and self.wavs[j + 1].stem == nxt),
                      cand[0] if cand else None)
