@@ -1568,6 +1568,7 @@ def _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed)
         "format": fmt,
         "speed": float(speed),
         "pauses": PAUSE,
+        "pauses": PAUSE,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
