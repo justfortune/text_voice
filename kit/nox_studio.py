@@ -5727,17 +5727,24 @@ class Studio:
             return "идёт работа с голосами — подождите"
         return ""                                          # сверка ударений не мешает: её итоги привязаны к тексту фраз
 
-    def _proj_audio_check(self, files: dict, need: dict) -> dict:
-        """Быстрая оценка (по именам и размерам): какие записи проекта уже есть на диске, какие добавятся."""
-        r = dict(have=0, add=0, differ=0, trash=0, missing=0)
+    def _proj_audio_check(self, files: dict, need: dict, foreign: bool = False) -> dict:
+        """Оценка записей проекта. Для чужой папки отдельно отмечает WAV без вложенных байтов: совпадение размера
+        не доказывает, что это та же запись."""
+        r = dict(have=0, add=0, differ=0, trash=0, missing=0, unverified=0)
         for arc, v in list(files.items()) + list(need.items()):
             m = self.TAKE_ARC.match(arc)
             if not m or m.group(3) != "wav":
                 continue
             size = v[0] if isinstance(v, list) else v
+            want_sha = v[1] if isinstance(v, list) and len(v) > 1 else None
             dst = self.take_path(m.group(1), m.group(2))
+            if foreign and arc in need and (dst.exists() or self._trash_find(m.group(1), m.group(2))):
+                r["unverified"] += 1
             if dst.exists():
-                r["have" if dst.stat().st_size == size else "differ"] += 1
+                same = dst.stat().st_size == size
+                if same and want_sha:
+                    same = self._sha_file(dst) == want_sha
+                r["have" if same else "differ"] += 1
             elif arc in files:
                 r["add"] += 1                                  # в том числе запись-двойник: она лежит в файле под другим именем
             elif self._trash_find(m.group(1), m.group(2)):
@@ -5745,6 +5752,38 @@ class Studio:
             else:
                 r["missing"] += 1
         return r
+
+    def _proj_sid_conflict(self, sid: str, strict: bool, pf: dict, names: set, canon: dict) -> bool:
+        """Можно ли безопасно повторно использовать SID при загрузке проекта.
+
+        У проекта из другой папки WAV без самих байтов в архиве нельзя считать совпадающим
+        только по имени и размеру: активный или удалённый локальный дубль может быть другим.
+        """
+        if strict:
+            for tid, item in pf.items():
+                arc = item[0]
+                source_arc = arc if arc in names else canon.get(arc)
+                if source_arc not in names:
+                    active = self.takes_dir / sid / f"{sid}_{tid}.wav"
+                    if active.exists() or self._trash_find(sid, tid, "wav") is not None:
+                        return True
+        try:
+            local = [x for x in os.scandir(self.takes_dir / sid) if x.is_file()]
+        except OSError:
+            return False
+        for x in local:
+            mt = re.fullmatch(re.escape(sid) + r"_(t\\d+)\\.wav", x.name)
+            if not mt:
+                continue
+            q = pf.get(mt.group(1))
+            if q is None:
+                if strict:
+                    return True
+                continue
+            source_arc = q[0] if q[0] in names else canon.get(q[0])
+            if x.stat().st_size != q[1] or (q[2] and source_arc in names and self._sha_file(Path(x.path)) != q[2]):
+                return True
+        return False
 
     @staticmethod
     def _span(ns: list) -> str:
@@ -5767,7 +5806,8 @@ class Studio:
             return dict(ok=False, name=name, info=info, now=cur, proj=pc, compat=cp, audio={}, warn=[], busy="",
                         why=f"это проект другой книги («{m.get('title') or '?'}»): из {cp['total']} его правок в этой книге "
                             f"нашлись {cp['found']}. Сюда он не загружается.")
-        au = self._proj_audio_check(files, need)
+        foreign = m.get("home") != self.home_id()
+        au = self._proj_audio_check(files, need, foreign=foreign)
         warn = []
         if not cp["same"] and cp["lost"]:
             warn.append(f"Книга с тех пор переразбита: из {cp['total']} правок проекта свои фразы найдут {cp['found']}, "
@@ -5779,8 +5819,11 @@ class Studio:
             warn.append(f"Закреплённых частей станет меньше: сейчас — {self._span(cur['fixed'])}, в проекте — "
                         f"{self._span(pc['fixed'])}. Части {self._span(back)} снова станут рабочими; конвейер при следующем "
                         f"запуске возьмётся за первую незакреплённую.")
+        if au["unverified"]:
+            warn.append(f"В другой папке студии найдено {au['unverified']} одноимённых локальных записей без WAV внутри проекта. "
+                        "Их содержимое не подтверждено: при первом импорте они не будут автоматически подставлены вместо исходных дублей.")
         if au["missing"]:
-            warn.append(f"Записей не найдено: {au['missing']} (их нет ни в файле, ни на диске, ни в корзине студии). У таких фраз "
+            warn.append(f"Записей не найдено или их нельзя безопасно сопоставить: {au['missing']}. У таких фраз "
                         f"будет пометка «потерян дубль» — их можно переозвучить или вернуть к черновой записи.")
         if au["trash"]:
             warn.append(f"Дублей, удалённых позже, вернётся из корзины студии: {au['trash']}.")
@@ -5791,7 +5834,7 @@ class Studio:
         if gone:
             warn.append("Ролей из проекта сейчас нет в книге: " + ", ".join(gone[:6]) + (" и др." if len(gone) > 6 else "")
                         + " — у таких фраз останется роль из разметки.")
-        if m.get("home") != self.home_id():
+        if foreign:
             warn.append("Проект сохранён в другой папке или на другом компьютере: его записи лягут отдельно от здешних.")
         return dict(ok=True, name=name, info=info, now=cur, proj=pc, compat=cp, audio=au, warn=warn,
                     busy=self._proj_busy_why(), why="")
@@ -5884,24 +5927,7 @@ class Studio:
                 op.stage("записи: что уже есть, что добавить", len(sids))
 
                 def clash_in(c: str, strict: bool, pf: dict) -> bool:
-                    """Занята ли папка записей c другим звуком: файл с тем же номером дубля отличается от проектного;
-                    strict (проект из другой папки) — ещё и любой здешний дубль, которого в проекте нет."""
-                    try:
-                        local = [x for x in os.scandir(self.takes_dir / c) if x.is_file()]
-                    except OSError:
-                        return False
-                    for x in local:
-                        mt = re.fullmatch(re.escape(c) + r"_(t\d+)\.wav", x.name)
-                        if not mt:
-                            continue
-                        q = pf.get(mt.group(1))
-                        if q is None:
-                            if strict:
-                                return True
-                        elif x.stat().st_size != q[1] or (q[2] and (q[0] in names or canon.get(q[0]) in names)
-                                                          and self._sha_file(Path(x.path)) != q[2]):
-                            return True
-                    return False
+                    return self._proj_sid_conflict(c, strict, pf, names, canon)
 
                 for sid in sids:
                     op.step()
