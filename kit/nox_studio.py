@@ -5772,7 +5772,7 @@ class Studio:
         except OSError:
             return False
         for x in local:
-            mt = re.fullmatch(re.escape(sid) + r"_(t\\d+)\\.wav", x.name)
+            mt = re.fullmatch(re.escape(sid) + r"_(t\d+)\.wav", x.name)
             if not mt:
                 continue
             q = pf.get(mt.group(1))
