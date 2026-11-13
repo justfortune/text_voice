@@ -87,6 +87,68 @@ class ProjectAudioIdentityTests(unittest.TestCase):
 
 
 
+    def test_same_size_import_asset_with_different_hash_is_reported(self):
+        local = self.root / "studio" / "imports" / "s000001_t001_original.wav"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(b"local01")
+        arc = "imports/s000001_t001_original.wav"
+        expected = b"sourceX"
+        self.assertEqual(len(expected), local.stat().st_size)
+
+        conflicts = self.s._proj_asset_conflicts({
+            arc: [len(expected), hashlib.sha1(expected).hexdigest()]
+        })
+
+        self.assertEqual([arc], conflicts)
+
+    def test_same_size_sound_with_matching_hash_is_not_a_conflict(self):
+        local = self.root / "studio" / "sounds" / "door_12345678.wav"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        payload = b"same-sound"
+        local.write_bytes(payload)
+        arc = "sounds/door_12345678.wav"
+
+        conflicts = self.s._proj_asset_conflicts({
+            arc: [len(payload), hashlib.sha1(payload).hexdigest()]
+        })
+
+        self.assertEqual([], conflicts)
+
+    def test_project_load_aborts_asset_collision_before_creating_snapshot(self):
+        import threading
+        local = self.root / "studio" / "imports" / "same.wav"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(b"local-a")
+        project_audio = b"other-a"
+        self.assertEqual(len(project_audio), local.stat().st_size)
+        archive = Mock()
+        archive.close = Mock()
+
+        s = studio.Studio.__new__(studio.Studio)
+        s.dir = self.root / "studio"
+        s.sounds_dir = s.dir / "sounds"
+        s.lock = threading.RLock()
+        s._proj_read = lambda _path: (
+            archive,
+            {"title": "Test", "home": "different"},
+            {"segs": {}, "parts": []},
+            {"imports/same.wav": [len(project_audio), hashlib.sha1(project_audio).hexdigest()]},
+            {},
+        )
+        s._proj_compat = lambda _m, _st: {
+            "same": True, "other": False, "found": 0, "lost": 0, "total": 0
+        }
+        s.project_save = Mock()
+
+        with self.assertRaisesRegex(studio.Oops, "совпадают с местными по имени и размеру"):
+            s._project_load(self.root / "external.noxproj")
+
+        s.project_save.assert_not_called()
+        archive.close.assert_called_once_with()
+        self.assertFalse((s.dir / "projects" / "auto").exists())
+        self.assertFalse((s.dir / "edits.json").exists())
+
+
 class ProjectArchiveIntegrityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
