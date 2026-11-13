@@ -151,11 +151,11 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             parts = Path(td)
             (parts / "part_01.times.tsv").write_text(
-                "00:00.0\t00:01.0\t1\tnarrator\ta\tfirst\t0.000\t1.000\n",
+                "00:00.0\t00:01.0\t1\tnarrator\tvoice-1\tfirst\t0.000\t1.000\n",
                 encoding="utf-8",
             )
             (parts / "part_02.times.tsv").write_text(
-                "00:00.0\t00:02.0\t2\tnarrator\tb\tsecond\t0.000\t2.000\n",
+                "00:00.0\t00:02.0\t2\tnarrator\tvoice-2\tsecond\t0.000\t2.000\n",
                 encoding="utf-8",
             )
             s = self._clock_studio(parts, ["first", "second"])
@@ -242,6 +242,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         s = studio.Studio.__new__(studio.Studio)
         s.idx_of = {"before": 0, "inside": 1}
         s.cue_lead = lambda cue, i, a: 2.5
+        s.cue_file = lambda cue: None
         cue = {"uid": "before", "est": 5.0, "kind": "sfx", "loop": False}
 
         result = s.cue_times(cue, {"inside": (0.0, 1.0)}, 1, 1, 3.0)
@@ -256,6 +257,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         s = studio.Studio.__new__(studio.Studio)
         s.idx_of = {"before": 0, "inside": 1}
         s.cue_lead = lambda cue, i, a: 6.0
+        s.cue_file = lambda cue: None
         cue = {"uid": "before", "est": 5.0, "kind": "sfx", "loop": False}
 
         result = s.cue_times(cue, {"inside": (0.0, 1.0)}, 1, 1, 3.0)
@@ -271,6 +273,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         s.rows = [{"kind": "text", "chapter": 1, "ch_title": "chapter"}]
         s.uids = ["same-text.0"]
         s._abs = {}
+        s.speed = 1.0
         s.rule_index = lambda: {}
         s.eff = lambda i, ridx: {"pause": 100, "after": 0.0}
         s.src = lambda i: {"path": Path("same-audio.wav")}
