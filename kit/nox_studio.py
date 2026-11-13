@@ -531,7 +531,7 @@ class Studio:
                    n.EQ_MAX, n.SENT_GAP_ON, getattr(n, "NOX_STAGE", 0)])
 
     # ------------------------------------------------------------------ книга: реплики, роли, привязка
-    def load_rows(self, force=False) -> bool:
+    def load_rows(self, force=False, strict=False) -> bool:
         try:
             a, b = n.CSV_PATH.stat(), n.ROLES_PATH.stat()
             sig = (a.st_size, a.st_mtime_ns, b.st_size, b.st_mtime_ns)
@@ -545,8 +545,8 @@ class Studio:
             if not rows or any(k not in rows[0] for k in need) or any(r.get("text") is None for r in rows):
                 raise ValueError("в таблице реплик не хватает столбцов или строка оборвана")
         except Exception as e:                     # конвейер прямо сейчас переписывает файлы — живём на прежних
-            if getattr(self, "rows", None) is None:
-                raise Oops(f"не читается разбивка книги (work\\segments.csv): {type(e).__name__}: {e}")
+            if strict or getattr(self, "rows", None) is None:
+                raise Oops(f"не читается разбивка книги (work\\segments.csv): {type(e).__name__}: {e}") from e
             return False
         keys, uids, seen = [], [], {}
         for r in rows:
@@ -5816,12 +5816,17 @@ class Studio:
                     orph0 = len(new["orphans"])
                     self.backup()
                     new["seq"] = max(seq, int(self.store.get("seq", 0) or 0))
+                    old_store = self.store
                     self.store = new
+                    try:
+                        self.load_rows(force=True, strict=True)     # при ошибке нельзя продолжать со старой разметкой книги
+                    except Exception:
+                        self.store = old_store
+                        raise
                     self.undo.clear()
                     self._takes.clear()
                     self.jobs.clear()
                     self._parts_cache = None
-                    self.load_rows(force=True)                     # вставки проекта встают в ряд, правки ищут свои фразы
                     self.save("загружен проект", {"file": f.name, "count": len(new["segs"])})
                     lost = len(self.store["orphans"]) - orph0
                     if snd_add:
