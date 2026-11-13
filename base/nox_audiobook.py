@@ -1520,7 +1520,7 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
         parts.append((start, len(rows) - 1, True))     # хвост книги — последняя часть, пусть и короче
     elif start < ready:
         parts.append((start, ready - 1, False))        # недособранная часть (ещё растёт)
-    DUR_CACHE.write_text(json.dumps(cache), encoding="utf-8")
+_atomic_write_text(DUR_CACHE, json.dumps(cache, ensure_ascii=False) + "\n")
     return parts, ready, complete
 
 
@@ -1538,7 +1538,8 @@ def _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed)
             st = wav.stat()
         except OSError as e:
             raise ValueError(f"нет готового WAV для части: {wav.name}") from e
-        wavs.append([wav.name, st.st_size, st.st_mtime_ns])
+        # mtime/size help diagnosis, but the digest is authoritative for source identity.
+        wavs.append([wav.name, st.st_size, st.st_mtime_ns, _file_sha256(wav)])
         selected_rows.append({field: row.get(field) for field in FIELDS})
     payload = {
         "schema": 1,
@@ -1571,7 +1572,10 @@ def _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt="m4b",
     # Keep the entire validated suffix: a crash during rebuilding an early part must not
     # truncate index records for later, already-existing output files.
     frozen = [dict(part) for part in saved_index]
-    planned_count = len(parts)
+planned_count = len(parts)
+    if len(saved_index) > planned_count:
+        raise ValueError("work/parts.json содержит больше частей, чем текущий план; старый индекс и файлы сохранены, "
+                         "автоматическое усечение запрещено")
     for existing in PARTS.glob(f"part_*.{fmt}"):
         match = re.fullmatch(rf"part_(\d+)\.{re.escape(fmt)}", existing.name)
         if match and int(match.group(1)) > planned_count:
