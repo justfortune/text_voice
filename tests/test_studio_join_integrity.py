@@ -21,6 +21,40 @@ def make_studio(uids, segs, pidx=None):
     return s
 
 
+class LoadRowsFailurePolicyTests(unittest.TestCase):
+    def _studio(self):
+        s = studio.Studio.__new__(studio.Studio)
+        s.rows = [{"id": "existing"}]
+        s.rows_sig = None
+        s.rows_at = 0
+        return s
+
+    def test_strict_reload_raises_instead_of_silently_reusing_old_rows(self):
+        import types
+        s = self._studio()
+        fake_n = types.SimpleNamespace(
+            CSV_PATH=Path("missing-segments.csv"),
+            ROLES_PATH=Path("missing-roles.json"),
+            load_rows=lambda: (_ for _ in ()).throw(OSError("segments temporarily unavailable")),
+        )
+        with patch.object(studio, "n", fake_n):
+            with self.assertRaisesRegex(studio.Oops, "segments temporarily unavailable"):
+                s.load_rows(force=True, strict=True)
+        self.assertEqual([{"id": "existing"}], s.rows)
+
+    def test_non_strict_reload_keeps_existing_runtime_fallback(self):
+        import types
+        s = self._studio()
+        fake_n = types.SimpleNamespace(
+            CSV_PATH=Path("missing-segments.csv"),
+            ROLES_PATH=Path("missing-roles.json"),
+            load_rows=lambda: (_ for _ in ()).throw(OSError("segments temporarily unavailable")),
+        )
+        with patch.object(studio, "n", fake_n):
+            self.assertFalse(s.load_rows(force=True))
+        self.assertEqual([{"id": "existing"}], s.rows)
+
+
 class PhraseChainIntegrityTests(unittest.TestCase):
     def test_valid_multi_phrase_chain_is_reconstructed_in_book_order(self):
         s = make_studio(
