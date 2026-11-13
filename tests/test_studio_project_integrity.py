@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """Project archive and cross-folder audio identity regression tests."""
 import hashlib
+import zipfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import sys
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +82,61 @@ class ProjectAudioIdentityTests(unittest.TestCase):
 
         self.assertEqual(1, result["unverified"])
         self.assertEqual(1, result["have"])
+
+
+
+class ProjectArchiveIntegrityTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.s = studio.Studio.__new__(studio.Studio)
+
+    def test_reader_closes_zip_when_manifest_cannot_be_read(self):
+        fake_zip = Mock()
+        fake_zip.read.side_effect = KeyError("manifest.json")
+
+        with patch("zipfile.ZipFile", return_value=fake_zip):
+            with self.assertRaisesRegex(studio.Oops, "не читается как файл проекта"):
+                self.s._proj_read(self.root / "broken.noxproj")
+
+        fake_zip.close.assert_called_once_with()
+
+    def test_bad_audio_checksum_does_not_replace_existing_take(self):
+        archive = self.root / "project.zip"
+        arc = "takes/s000001/s000001_t001.wav"
+        payload = b"new-audio"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr(arc, payload)
+
+        target = self.root / "takes" / "s000001" / "s000001_t001.wav"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"old-audio")
+
+        with zipfile.ZipFile(archive) as zf, patch.object(studio, "log"):
+            result = self.s._zip_extract(zf, arc, target, "0" * 40)
+
+        self.assertFalse(result)
+        self.assertEqual(b"old-audio", target.read_bytes())
+        self.assertFalse(target.with_name(target.name + ".part").exists())
+
+    def test_valid_audio_checksum_is_published_without_temp_file(self):
+        archive = self.root / "project.zip"
+        arc = "takes/s000001/s000001_t001.wav"
+        payload = b"verified-audio"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr(arc, payload)
+
+        target = self.root / "takes" / "s000001" / "s000001_t001.wav"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"old-audio")
+
+        with zipfile.ZipFile(archive) as zf:
+            result = self.s._zip_extract(zf, arc, target, hashlib.sha1(payload).hexdigest())
+
+        self.assertTrue(result)
+        self.assertEqual(payload, target.read_bytes())
+        self.assertFalse(target.with_name(target.name + ".part").exists())
 
 
 if __name__ == "__main__":
