@@ -28,6 +28,7 @@ import csv
 import bisect
 import collections
 import concurrent.futures
+import copy
 import hashlib
 import hmac
 import json
@@ -1711,7 +1712,7 @@ class Studio:
         ex["kv"] = 2
         write_atomic(self.dir / "edits.json", json.dumps(self.store, ensure_ascii=False, indent=1))
 
-    def proc(self, i: int, eq: dict, ef: dict, sc: dict, key: str):
+    def proc(self, i: int, eq: dict, ef: dict, sc: dict, key: str, row_snapshot=None, roles_snapshot=None):
         """Запись фразы -> звук для части. Шаги и порядок — как в assemble() конвейера (сверено на этапе STAGE_OK)."""
         cp = self.cache_dir / f"{key}.npy"
         if cp.exists():
@@ -1725,8 +1726,11 @@ class Studio:
                 return x
             except Exception:
                 cp.unlink(missing_ok=True)
-        r = self.rows[i]
-        rc = self.roles["roles"].get(ef["role"], {})
+        # A render can outlive a book reload. Use the row/voice configuration captured by timeline(),
+        # never resolve the old row index against the newly loaded edition.
+        r = row_snapshot if row_snapshot is not None else self.rows[i]
+        role_data = roles_snapshot if roles_snapshot is not None else self.roles
+        rc = role_data["roles"].get(ef["role"], {})
         x, sr = self.read_audio(sc["path"])
         tr = sc.get("trim")
         if tr:                                             # обрезка дубля: исходная запись цела, берётся её отрезок
@@ -1744,9 +1748,12 @@ class Studio:
             if abs(gain - 1.0) > 0.01:
                 x = np.clip(x * gain, -1.0, 1.0)
             x = np.asarray(n._edges(x, sr), dtype="float32")
-            tmp = self.cache_dir / f"{key}.tmp.npy"
-            np.save(tmp, x)
-            os.replace(tmp, cp)
+            tmp = self.cache_dir / f"{key}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp.npy"
+            try:
+                np.save(tmp, x)
+                os.replace(tmp, cp)
+            finally:
+                tmp.unlink(missing_ok=True)
             return x
         # Счёт букв и поиск пауз — по тому же тексту, что у конвейера (исходная фраза): копия черновой записи и дубль
         # с поправленным ударением обрабатываются точно как черновик. Только если в дубле другие СЛОВА — по прочитанному.
@@ -1776,9 +1783,12 @@ class Studio:
         if abs(gain - 1.0) > 0.01:
             x = np.clip(x * gain, -1.0, 1.0)
         x = np.asarray(n._edges(x, sr), dtype="float32")
-        tmp = self.cache_dir / f"{key}.tmp.npy"
-        np.save(tmp, x)
-        os.replace(tmp, cp)
+        tmp = self.cache_dir / f"{key}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp.npy"
+        try:
+            np.save(tmp, x)
+            os.replace(tmp, cp)
+        finally:
+            tmp.unlink(missing_ok=True)
         return x
 
     def eq_for(self, i: int) -> dict:
@@ -1793,7 +1803,7 @@ class Studio:
             self.save(f"часть {k}: опорный темп ролей", {"part": k, "roles": len(rec["eq"])})
         return rec["eq"]
 
-    def _proc_many(self, items: list, op=None) -> dict:
+    def _proc_many(self, items: list, op=None, row_snapshots=None, roles_snapshot=None) -> dict:
         """Обработка фраз отрезка -> {ключ: звук}. Готовое берётся из кэша, остальное считается в несколько потоков:
         растяжка идёт через ffmpeg (отдельный процесс на фразу), а ядер у компьютера много. Фразы с общей записью
         (одинаковые реплики одной роли лежат одним файлом) идут друг за другом в одном потоке — у них общий файл
@@ -1801,7 +1811,8 @@ class Studio:
         todo, groups = {}, {}
         for i, ef, sc, eq, key, pause in items:
             if key != "none" and key not in todo:
-                todo[key] = (i, eq, ef, sc, key)
+                row_snapshot = (row_snapshots or {}).get(i)
+                todo[key] = (i, eq, ef, sc, key, row_snapshot, roles_snapshot)
                 groups.setdefault(sc.get("stem0") or sc["path"].stem, []).append(key)
         hit = sum(1 for key in todo if (self.cache_dir / f"{key}.npy").exists())
         if op is not None:
@@ -1835,31 +1846,36 @@ class Studio:
             for i in range(a, b + 1):
                 if i in self._abs:                             # присоединённая фраза звучит внутри головной
                     continue
-                ef, sc = self.eff(i, ridx), self.src(i)
-                eq = self.eq_for(i)
+                ef = copy.deepcopy(self.eff(i, ridx))
+                sc = copy.deepcopy(self.src(i))
+                eq = copy.deepcopy(self.eq_for(i))
                 key = (keyfn or self.proc_key)(i, eq, ef, sc) if sc["path"] is not None else "none"
                 pause = int((ef["pause"] if items else 0) * n.PAUSE_SCALE / pdiv) + aft
                 items.append((i, ef, sc, eq, key, pause))
                 # «пауза после фразы» — ровно столько секунд в готовом файле (общий множитель пауз книги её не меняет)
                 aft = int(round(1000 * float(ef.get("after") or 0) * (self.speed or 1.0)))
             chains = {it[0]: self.chain(it[0]) for it in items} if self._abs else {}
-        # The processed-audio key intentionally ignores book position so identical speech can share a WAV cache.
-        # Render metadata, however, contains UID anchors and must not be reused for another edition/segment mapping.
-        identity = []
-        for it in items:
-            i = it[0]
-            chain = chains.get(i) or [i]
-            r = self.rows[i]
-            identity.append([self.uids[i], [self.uids[j] for j in chain], r.get("chapter"),
-                             r.get("ch_title") if r.get("kind") == "head" else None])
-        ver = sha(jd(identity) + "|" + "|".join(f"{it[4]}:{it[5]}" for it in items)
-                  + (f"|+{aft}" if aft else "") + self.asm_sig(), 16)
+            indices = {i for it in items for i in ([it[0]] + (chains.get(it[0]) or []))}
+            # The processed-audio key ignores book position so identical speech can share a WAV cache.
+            # Render metadata contains UID anchors and must be tied to this exact row snapshot.
+            row_snapshots = {i: dict(self.rows[i]) for i in indices}
+            uid_snapshots = {i: self.uids[i] for i in indices}
+            roles_snapshot = copy.deepcopy(self.roles)
+            identity = []
+            for it in items:
+                i = it[0]
+                chain = chains.get(i) or [i]
+                row = row_snapshots[i]
+                identity.append([uid_snapshots[i], [uid_snapshots[j] for j in chain], row.get("chapter"),
+                                 row.get("ch_title") if row.get("kind") == "head" else None])
+            ver = sha(jd(identity) + "|" + "|".join(f"{it[4]}:{it[5]}" for it in items)
+                      + (f"|+{aft}" if aft else "") + self.asm_sig(), 16)
         if not want_audio:
             return {"ver": ver, "items": items}, None
-        done = self._proc_many(items, op)
+        done = self._proc_many(items, op, row_snapshots=row_snapshots, roles_snapshot=roles_snapshot)
         pieces, segs, chapters, t = [], [], [], 0.0
         for i, ef, sc, eq, key, pause in items:
-            r = self.rows[i]
+            r = row_snapshots[i]
             pieces.append(np.zeros(int(sr * pause / 1000), dtype="float32"))
             t += pause / 1000
             if r["kind"] == "head":
@@ -1867,10 +1883,10 @@ class Studio:
                     chapters.pop()
                 chapters.append((t, r["ch_title"]))
             x = done[key] if key != "none" else np.zeros(int(sr * 0.8), dtype="float32")
-            segs.append([self.uids[i], round(t, 3), round(t + len(x) / sr, 3)])
+            segs.append([uid_snapshots[i], round(t, 3), round(t + len(x) / sr, 3)])
             ch = chains.get(i) or [i]
             if len(ch) > 1:                                    # места присоединённых фраз внутри общей записи — по доле букв
-                ws = [max(1, len(n.RE_RU_LETTERS.sub("", self.rows[j]["text"]))) for j in ch]
+                ws = [max(1, len(n.RE_RU_LETTERS.sub("", row_snapshots[j]["text"]))) for j in ch]
                 tot, acc, ln = float(sum(ws)), ws[0], len(x) / sr
                 for j, w in zip(ch[1:], ws[1:]):
                     segs.append([self.uids[j], round(t + ln * acc / tot, 3), round(t + ln * (acc + w) / tot, 3)])
