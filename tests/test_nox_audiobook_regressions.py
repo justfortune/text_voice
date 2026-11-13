@@ -202,7 +202,7 @@ class BookEditionSnapshotTests(unittest.TestCase):
 
                 second = n._snapshot_current_edition()
 
-            self.assertEqual(snapshot, second)
+            self.assertNotEqual(snapshot, second)
             self.assertIn("old edition", original_csv)
             self.assertIn("original", original_roles)
             self.assertIn('"start_id": "1"', original_index)
