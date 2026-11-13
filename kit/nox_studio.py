@@ -5793,11 +5793,10 @@ class Studio:
         return False
 
     def _proj_asset_conflicts(self, files: dict) -> list:
-        """Find same-name, same-size imported assets whose content differs from the project archive.
+        """Find project assets whose destination name is already occupied by different or unverifiable bytes.
 
-        The loader must not treat size equality as proof of identity. Different-sized collisions
-        already receive a distinct destination name; same-sized mismatches are reported and fail closed
-        because sound/cue and original-import references must not silently point at local content.
+        Existing asset references are name-based. Until the import path can transactionally remap every
+        reference, any content mismatch must stop before the current book or local library is changed.
         """
         conflicts = []
         for arc, value in files.items():
@@ -5805,17 +5804,10 @@ class Studio:
             name = Path(arc).name
             if kind not in ("imports", "sounds") or not name or name == "index.json":
                 continue
-            size = value[0] if isinstance(value, list) and value else value
             digest = value[1] if isinstance(value, list) and len(value) > 1 else None
-            try:
-                size = int(size)
-            except (TypeError, ValueError):
-                continue
             directory = self.dir / "imports" if kind == "imports" else self.sounds_dir
             local = directory / name
-            if not local.is_file() or local.stat().st_size != size:
-                continue
-            if not digest or self._sha_file(local) != str(digest):
+            if local.is_file() and (not digest or self._sha_file(local) != str(digest)):
                 conflicts.append(arc)
         return sorted(conflicts)
 
@@ -5860,7 +5852,7 @@ class Studio:
                         "Их содержимое не подтверждено: при первом импорте они не будут автоматически подставлены вместо исходных дублей.")
         if asset_conflicts:
             sample = ", ".join(asset_conflicts[:5])
-            warn.append(f"Конфликт пользовательских звуков/исходников с тем же именем и размером, но другим содержимым: "
+            warn.append(f"Конфликт пользовательских звуков/исходников с тем же именем, но другим или неподтверждённым содержимым: "
                         f"{len(asset_conflicts)} ({sample}). Загрузка остановится, чтобы не подставить местный файл вместо проектного.")
         if au["missing"]:
             warn.append(f"Записей не найдено или их нельзя безопасно сопоставить: {au['missing']}. У таких фраз "
@@ -5943,7 +5935,7 @@ class Studio:
             asset_conflicts = self._proj_asset_conflicts(files)
             if asset_conflicts:
                 sample = ", ".join(asset_conflicts[:5])
-                raise Oops(f"проект содержит пользовательские звуки/исходники, которые совпадают с местными по имени и размеру, "
+                raise Oops(f"проект содержит пользовательские звуки/исходники, для которых местный файл с тем же именем имеет другое или неподтверждённое содержимое "
                            f"но отличаются по содержимому ({len(asset_conflicts)}: {sample}). Загрузка отменена без изменений. "
                            "Сначала освободите/переименуйте конфликтующие местные копии или перенесите проект в отдельную папку студии.")
             # 1. нынешнее состояние — в точку возврата: загрузку всегда можно отыграть назад
