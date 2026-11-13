@@ -2268,6 +2268,7 @@ class Studio:
                         if x is None:
                             continue
                         if (self.store["segs"].get(x["id"]) or {}).get("locked"):
+                            self.undo.append((uid, old, label))
                             raise Oops("вставка закреплена — снимите закрепление, чтобы отменить её")
                     elif d["op"] == "del" and x is None:
                         pass
@@ -2326,6 +2327,7 @@ class Studio:
                     continue
                 cur = self.store["segs"].get(uid) or {}
                 if cur.get("locked") and not (old or {}).get("locked"):
+                    self.undo.append((uid, old, label))
                     raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
                 before = jd(self.store["segs"])
                 abs_before = jd(self._abs)
