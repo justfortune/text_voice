@@ -5830,36 +5830,66 @@ class Studio:
                     ex = (q or {}).get("export")
                     if ex and old_ch.get(c, {}).get("ver") != ex.get("ver"):
                         q["export"] = None
-                # 4. сама замена — одним действием
+                # 4. сама замена — одним действием. До атомарной записи edits.json любое исключение
+                # возвращает и модель, и все производные индексы к прежнему состоянию.
                 with self.lock:
                     orph0 = len(new["orphans"])
                     self.backup()
                     new["seq"] = max(seq, int(self.store.get("seq", 0) or 0))
                     old_store = self.store
+                    row_attrs = ("rows", "roles", "keys", "uids", "pidx", "sidx", "idx_of", "id2i", "_spans",
+                                 "_clock", "stems", "base_roles", "role_cnt", "wavs", "chapters", "rows_sig",
+                                 "rows_at", "_abs")
+                    missing = object()
+                    old_rows = {key: getattr(self, key, missing) for key in row_attrs}
+                    old_undo, old_takes, old_jobs = list(self.undo), dict(self._takes), dict(self.jobs)
+                    old_parts_cache = self._parts_cache
                     self.store = new
                     try:
-                        self.load_rows(force=True, strict=True)     # при ошибке нельзя продолжать со старой разметкой книги
+                        self.load_rows(force=True, strict=True)     # без промежуточной записи reanchor
+                        self.undo.clear()
+                        self._takes.clear()
+                        self.jobs.clear()
+                        self._parts_cache = None
+                        self.save("загружен проект", {"file": f.name, "count": len(new["segs"])})
                     except Exception:
-                        self.store = old_store
-                        raise
-                    self.undo.clear()
-                    self._takes.clear()
-                    self.jobs.clear()
-                    self._parts_cache = None
-                    self.save("загружен проект", {"file": f.name, "count": len(new["segs"])})
+                        # save() сначала атомарно заменяет edits.json, а затем пишет только журнал/UI.
+                        # Если исключение случилось после замены, новое состояние уже является durable commit.
+                        try:
+                            committed = (self.dir / "edits.json").read_text(encoding="utf-8") == json.dumps(
+                                self.store, ensure_ascii=False, indent=1)
+                        except Exception:
+                            committed = False
+                        if not committed:
+                            self.store = old_store
+                            for key, value in old_rows.items():
+                                if value is missing:
+                                    self.__dict__.pop(key, None)
+                                else:
+                                    setattr(self, key, value)
+                            self.undo, self._takes, self.jobs = old_undo, old_takes, old_jobs
+                            self._parts_cache = old_parts_cache
+                            raise
+                        log("проект сохранён, но не все служебные записи обновились:\\n" + traceback.format_exc(), "warn")
                     lost = len(self.store["orphans"]) - orph0
                     if snd_add:
-                        idx = self.sound_index()
-                        add = {k: v for k, v in snd_add.items() if k not in idx and (self.sounds_dir / k).exists()}
-                        if add:
-                            idx.update(add)
-                            write_atomic(self.sounds_dir / "index.json", jd(idx))
+                        try:
+                            idx = self.sound_index()
+                            add = {k: v for k, v in snd_add.items() if k not in idx and (self.sounds_dir / k).exists()}
+                            if add:
+                                idx.update(add)
+                                write_atomic(self.sounds_dir / "index.json", jd(idx))
+                        except Exception:
+                            log("проект загружен, но библиотека звуков обновлена не полностью:\\n" + traceback.format_exc(), "warn")
                     if pst:
-                        cur_st = self.stress_load()
-                        fresh = {u: v for u, v in pst.items() if u not in cur_st}
-                        if fresh:
-                            cur_st.update(fresh)
-                            write_atomic(self.dir / "stress.json", jd(cur_st))
+                        try:
+                            cur_st = self.stress_load()
+                            fresh = {u: v for u, v in pst.items() if u not in cur_st}
+                            if fresh:
+                                cur_st.update(fresh)
+                                write_atomic(self.dir / "stress.json", jd(cur_st))
+                        except Exception:
+                            log("проект загружен, но словарь ударений обновлён не полностью:\\n" + traceback.format_exc(), "warn")
                     counts = self.project_counts(self.store)
                 op.note = (f"правок фраз {counts['edits']}, вставок {counts['ins']}; записей добавлено {stat['added']}, уже было {stat['have']}"
                            + (f", из корзины {stat['trash']}" if stat["trash"] else "")
