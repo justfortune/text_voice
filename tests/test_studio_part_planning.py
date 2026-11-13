@@ -272,6 +272,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         s.lock = threading.RLock()
         s.rows = [{"kind": "text", "chapter": 1, "ch_title": "chapter"}]
         s.roles = {"roles": {"narrator": {"tempo": 1.0, "gain": 1.0}}}
+        s.base_roles = ["narrator"]
         s.uids = ["same-text.0"]
         s._abs = {}
         s.speed = 1.0
@@ -297,7 +298,8 @@ class CrossPartSynchronizationTests(unittest.TestCase):
 
         s = studio.Studio.__new__(studio.Studio)
         s.lock = threading.RLock()
-        s.rows = [{"kind": "head", "chapter": 1, "ch_title": "Original Chapter", "text": "Chapter"}]
+        s.rows = [{"id": 1, "kind": "head", "chapter": 1, "ch_title": "Original Chapter", "text": "Chapter"}]
+        s.base_roles = ["narrator"]
         s.uids = ["original-heading.0"]
         s._abs = {}
         s.speed = 1.0
@@ -365,6 +367,44 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         self.assertEqual(1.25, captured["tempo"])
         self.assertEqual([1.0, 2.0], result["shared-key"])
 
+
+
+    def test_timeline_version_tracks_export_speed_and_row_metadata(self):
+        import threading
+        import types
+
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.rows = [{"id": 11, "kind": "text", "chapter": 1, "ch_title": "Chapter",
+                   "para": 1, "speaker": "narrator", "text": "same text"}]
+        s.roles = {"roles": {"narrator": {"tempo": 1.0, "gain": 1.0}}}
+        s.base_roles = ["narrator"]
+        s.uids = ["same-text.0"]
+        s._abs = {}
+        s.speed = 1.0
+        s.fmt = "m4b"
+        s.bitrate = "96k"
+        s.title = "Book"
+        s.author = "Author"
+        s.rule_index = lambda: {}
+        s.eff = lambda i, ridx: {"pause": 100, "after": 0.0, "role": "narrator",
+                                 "tech": "same text", "tech_src": "base", "locked": False,
+                                 "tempo": 1.0, "hits": []}
+        s.src = lambda i: {"path": Path("same-audio.wav")}
+        s.eq_for = lambda i: {}
+        s.proc_key = lambda i, eq, ef, sc: "shared-audio-key"
+        s.asm_sig = lambda: "same-assembly"
+
+        with patch.object(studio, "n", types.SimpleNamespace(TEMPO_G=1.0, PAUSE_SCALE=1.0)):
+            baseline = s.timeline(0, 0, False)[0]["ver"]
+            s.speed = 1.25
+            speed_changed = s.timeline(0, 0, False)[0]["ver"]
+            s.speed = 1.0
+            s.rows[0]["para"] = 2
+            paragraph_changed = s.timeline(0, 0, False)[0]["ver"]
+
+        self.assertNotEqual(baseline, speed_changed)
+        self.assertNotEqual(baseline, paragraph_changed)
 
 
 
