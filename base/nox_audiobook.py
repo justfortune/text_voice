@@ -1236,7 +1236,19 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
                 a, b = starts[0], ends[0]
             if a is None or b is None or b < a or (frozen and a != frozen[-1][1] + 1) or (not frozen and a != 0):
                 break
+            if keys[a] != p.get("start") or keys[b] != p.get("end"):
+                raise ValueError("work/parts.json относится к другой редакции книги: границы частей больше не "
+                                 "совпадают с аудио текущих реплик. Старые части и индекс сохранены; не запускайте "
+                                 "пересборку поверх них, пока не сохраните отдельную копию старой редакции.")
+            saved_sig = p.get("sig")
+            if saved_sig:
+                current_sig = hashlib.sha256("\n".join(keys[a:b + 1]).encode("utf-8")).hexdigest()
+                if saved_sig != current_sig:
+                    raise ValueError("содержимое части изменилось после сборки (work/parts.json): "
+                                     "сохраните старую редакцию и её аудио отдельно перед пересборкой.")
             frozen.append((a, b))
+    except ValueError:
+        raise
     except Exception:
         frozen = []
     if legacy_ambiguous:
