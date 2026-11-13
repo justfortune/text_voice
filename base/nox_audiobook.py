@@ -377,7 +377,124 @@ def collect_names(paras) -> set[str]:
     return names
 
 
+def _atomic_write_text(path: Path, text: str):
+    """Publish UTF-8 state through a unique temp file; never truncate the previous edition."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\\n") as f:
+            f.write(text)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _snapshot_current_edition():
+    """Archive the current book definition and time maps before segment() replaces them.
+
+    Audio outputs are not copied: they remain in their existing parts/ directory and are
+    listed in the manifest. This keeps the snapshot small while preserving the old mapping.
+    """
+    if not CSV_PATH.is_file() or not ROLES_PATH.is_file():
+        return None
+    editions = WORK / "editions"
+    sources = [("segments.csv", CSV_PATH), ("roles.json", ROLES_PATH)]
+    if PARTS_INDEX.is_file():
+        sources.append(("parts.json", PARTS_INDEX))
+    for time_map in sorted(PARTS.glob("part_*.times.tsv")):
+        sources.append((f"parts/{time_map.name}", time_map))
+
+    records = []
+    for rel, source in sources:
+        records.append({"path": rel, "size": source.stat().st_size, "sha256": _file_sha256(source)})
+    identity = hashlib.sha256(json.dumps(records, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    target = editions / f"edition_{identity[:20]}"
+
+    def verify(snapshot: Path):
+        try:
+            manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+            if manifest.get("edition_id") != identity or manifest.get("files") != records:
+                return False
+            for record in records:
+                file_path = snapshot / Path(record["path"])
+                if not file_path.is_file() or file_path.stat().st_size != record["size"] \
+                        or _file_sha256(file_path) != record["sha256"]:
+                    return False
+            return True
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+
+    if target.exists():
+        if verify(target):
+            return target
+        raise RuntimeError(f"архив прежней редакции повреждён: {target}; исходные файлы не заменены")
+
+    editions.mkdir(parents=True, exist_ok=True)
+    tmp_dir = editions / f".edition_{identity[:20]}.{os.getpid()}.{time.time_ns()}.tmp"
+    try:
+        tmp_dir.mkdir()
+        for record, (_, source) in zip(records, sources):
+            destination = tmp_dir / Path(record["path"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        outputs = []
+        for output in sorted(PARTS.glob("part_*")):
+            if output.is_file() and output.suffix.lower() in (".m4b", ".m4a", ".mp3"):
+                outputs.append({"path": f"parts/{output.name}", "size": output.stat().st_size})
+        manifest = {
+            "schema": 1,
+            "edition_id": identity,
+            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "files": records,
+            "outputs_kept_in_place": outputs,
+            "audio_copied": False,
+        }
+        _atomic_write_text(tmp_dir / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\\n")
+        tmp_dir.rename(target)
+        return target
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def _atomic_write_segments(rows):
+    """Write a complete segments.csv before atomically replacing the previous one."""
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CSV_PATH.with_name(f"{CSV_PATH.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
+            writer.writeheader()
+            writer.writerows(rows)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, CSV_PATH)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def segment(docx_paths, max_chars: int):
+    # Uses the same process-shared guard as parts.json/build_parts: a book cannot be
+    # resegmented while another process is freezing or publishing its part timeline.
+    with _claim_guard(CSV_PATH):
+        return _segment_locked(docx_paths, max_chars)
+
+
+def _segment_locked(docx_paths, max_chars: int):
     WORK.mkdir(exist_ok=True)
     if CSV_PATH.exists() and ROLES_PATH.exists():       # старые wav по номерам -> имена по хешу, пока жив старый CSV
         migrate_legacy_wavs(load_rows(), load_roles())
@@ -466,11 +583,6 @@ def segment(docx_paths, max_chars: int):
                 pause = PAUSE["dialog"] if (k == 0 and j == 0) else PAUSE["chunk"]
                 add(kind, who, cf, pause, ch, pi)
 
-    with CSV_PATH.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
-        w.writeheader()
-        w.writerows(rows)
-
     # roles.json — шаблон с описаниями голосов; существующий файл не перетираем, только дописываем новые роли
     roles = json.loads(ROLES_PATH.read_text(encoding="utf-8")) if ROLES_PATH.exists() else {
         "language": "Russian",
@@ -499,7 +611,12 @@ def segment(docx_paths, max_chars: int):
             roles["roles"][who] = {"instruct": instr, "same_as": None, "count": n}
         else:
             roles["roles"][who]["count"] = n
-    ROLES_PATH.write_text(json.dumps(roles, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Archive old inputs before replacing them; publish each new file atomically.
+    previous_edition = _snapshot_current_edition()
+    if previous_edition:
+        print(f"Предыдущая редакция сохранена: {previous_edition}")
+    _atomic_write_segments(rows)
+    _atomic_write_text(ROLES_PATH, json.dumps(roles, ensure_ascii=False, indent=2) + "\\n")
 
     # статистика
     conf_cnt = Counter(r["conf"] for r in rows if r["kind"] == "speech")
