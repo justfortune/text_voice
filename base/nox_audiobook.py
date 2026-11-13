@@ -1405,12 +1405,20 @@ def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
 
 
 def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=False, speed=1.0):
+    """Сериализует сборку частей между процессами: общие временные имена и индекс нельзя писать параллельно."""
+    with _claim_guard(PARTS_INDEX):
+        return _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt, quiet, speed)
+
+
+def _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=False, speed=1.0):
     """Собирает все закрытые части; существующий файл пропускается только при совпадении индекса и подписи."""
     saved_index = _read_parts_index()
     parts, ready, complete = plan_parts(rows, roles, minutes, speed=speed)
     PARTS.mkdir(exist_ok=True)
     new_files = []
-    frozen = []
+    # Keep the entire validated suffix: a crash during rebuilding an early part must not
+    # truncate index records for later, already-existing output files.
+    frozen = [dict(part) for part in saved_index]
     planned_count = len(parts)
     for existing in PARTS.glob(f"part_*.{fmt}"):
         match = re.fullmatch(rf"part_(\d+)\.{re.escape(fmt)}", existing.name)
@@ -1440,7 +1448,10 @@ def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=F
                                  "старый файл сохранён, автоматический пропуск запрещён")
             record["output_sha256"] = old_sha or _file_sha256(out)
             record["output_size"] = out.stat().st_size
-            frozen.append(record)
+            if n <= len(frozen):
+                frozen[n - 1] = record
+            else:
+                frozen.append(record)
             continue
 
         audio, sr, chapters, _ = assemble(rows[a:b + 1], roles, head_pause=False)
@@ -1451,7 +1462,10 @@ def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=F
             raise RuntimeError(f"кодировщик не создал готовый файл части: {out.name}")
         record["output_sha256"] = _file_sha256(out)
         record["output_size"] = out.stat().st_size
-        frozen.append(record)
+        if n <= len(frozen):
+            frozen[n - 1] = record
+        else:
+            frozen.append(record)
         _write_parts_index_atomic(frozen)
         new_files.append(out)
         if not quiet:
