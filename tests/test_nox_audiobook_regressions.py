@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -219,8 +220,56 @@ class LockTests(unittest.TestCase):
             os.utime(lock, (old, old))
             with patch.object(n, "_pid_alive", return_value=False):
                 self.assertTrue(n.claim(wav))
-            self.assertEqual(str(os.getpid()), lock.read_text(encoding="ascii"))
+            self.assertTrue(lock.read_text(encoding="ascii").startswith(str(os.getpid()) + ":"))
             n.release(wav)
+            self.assertFalse(lock.exists())
+
+    def test_release_does_not_remove_a_replacement_lock_with_another_token(self):
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "voice.wav"
+            lock = wav.with_suffix(".lock")
+            self.assertTrue(n.claim(wav))
+            own = lock.read_text(encoding="ascii")
+            replacement = f"{os.getpid()}:{'f' * 32}"
+            self.assertNotEqual(own, replacement)
+            lock.write_text(replacement, encoding="ascii")
+
+            n.release(wav)
+
+            self.assertEqual(replacement, lock.read_text(encoding="ascii"))
+
+    def test_concurrent_claims_and_stale_reclamation_are_serialized(self):
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "voice.wav"
+            lock = wav.with_suffix(".lock")
+            lock.write_text("12345", encoding="ascii")
+            os.utime(lock, (1, 1))
+            start = threading.Barrier(3)
+            attempted = threading.Barrier(3)
+            release_owner = threading.Event()
+            results = []
+
+            def contender():
+                start.wait(timeout=5)
+                acquired = n.claim(wav)
+                results.append(acquired)
+                attempted.wait(timeout=5)
+                if acquired:
+                    release_owner.wait(timeout=5)
+                    n.release(wav)
+
+            with patch.object(n, "_pid_alive", return_value=False):
+                workers = [threading.Thread(target=contender) for _ in range(2)]
+                for worker in workers:
+                    worker.start()
+                start.wait(timeout=5)
+                attempted.wait(timeout=5)
+                self.assertEqual([False, True], sorted(results))
+                release_owner.set()
+                for worker in workers:
+                    worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive())
+
             self.assertFalse(lock.exists())
 
     def test_claim_is_exclusive_and_release_is_owner_checked(self):
