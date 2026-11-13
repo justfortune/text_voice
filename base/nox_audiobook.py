@@ -382,7 +382,7 @@ def _atomic_write_text(path: Path, text: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     try:
-        with open(tmp, "w", encoding="utf-8", newline="\\n") as f:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
             f.flush()
             try:
@@ -457,7 +457,7 @@ def _snapshot_current_edition():
             "outputs_kept_in_place": outputs,
             "audio_copied": False,
         }
-        _atomic_write_text(tmp_dir / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\\n")
+        _atomic_write_text(tmp_dir / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
         tmp_dir.rename(target)
         return target
     except Exception:
@@ -616,7 +616,7 @@ def _segment_locked(docx_paths, max_chars: int):
     if previous_edition:
         print(f"Предыдущая редакция сохранена: {previous_edition}")
     _atomic_write_segments(rows)
-    _atomic_write_text(ROLES_PATH, json.dumps(roles, ensure_ascii=False, indent=2) + "\\n")
+    _atomic_write_text(ROLES_PATH, json.dumps(roles, ensure_ascii=False, indent=2) + "\n")
 
     # статистика
     conf_cnt = Counter(r["conf"] for r in rows if r["kind"] == "speech")
