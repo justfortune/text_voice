@@ -50,5 +50,51 @@ class SharedPartDurationContractTests(unittest.TestCase):
         self.assertEqual([(0, 1), (2, 2)], planned)
 
 
+class PipelinePartIndexCompatibilityTests(unittest.TestCase):
+    def _studio_with_index(self, root, entries):
+        import json
+        import types
+
+        parts = Path(root) / "parts"
+        parts.mkdir()
+        index = Path(root) / "parts.json"
+        index.write_text(json.dumps(entries), encoding="utf-8")
+        s = studio.Studio.__new__(studio.Studio)
+        s.rows = [{"id": i + 1} for i in range(4)]
+        s.wavs = [parts / f"{name}.wav" for name in ("a", "b", "c", "d")]
+        s._spans = {}
+        s.id2i = {}
+        s.ins_tail = lambda i: i
+        return s, types.SimpleNamespace(PARTS=parts, PARTS_INDEX=index)
+
+    def test_current_parts_index_without_legacy_sig_exposes_all_completed_parts(self):
+        with tempfile.TemporaryDirectory() as td:
+            s, pipeline = self._studio_with_index(td, [
+                {"n": 1, "start_id": "1", "end_id": "2", "start": "a", "end": "b"},
+                {"n": 2, "start_id": "3", "end_id": "4", "start": "c", "end": "d"},
+            ])
+            with patch.object(studio, "n", pipeline):
+                self.assertEqual([(0, 1), (2, 3)], s.pipeline_parts(0))
+
+    def test_legacy_parts_index_with_sig_remains_supported(self):
+        with tempfile.TemporaryDirectory() as td:
+            s, pipeline = self._studio_with_index(td, [
+                {"n": 1, "sig": "legacy", "start": "a", "end": "b"},
+                {"n": 2, "sig": "legacy", "start": "c", "end": "d"},
+            ])
+            with patch.object(studio, "n", pipeline):
+                self.assertEqual([(0, 1), (2, 3)], s.pipeline_parts(0))
+
+    def test_incomplete_index_entry_stops_without_fabricating_later_parts(self):
+        with tempfile.TemporaryDirectory() as td:
+            s, pipeline = self._studio_with_index(td, [
+                {"n": 1, "start_id": "1", "end_id": "2", "start": "a", "end": "b"},
+                {"n": 2, "start": "c"},  # incomplete record
+                {"n": 3, "start_id": "3", "end_id": "4", "start": "c", "end": "d"},
+            ])
+            with patch.object(studio, "n", pipeline):
+                self.assertEqual([(0, 1)], s.pipeline_parts(0))
+
+
 if __name__ == "__main__":
     unittest.main()
