@@ -1874,11 +1874,12 @@ class Studio:
                 row = row_snapshots[i]
                 # Include every row field and effective edit that downstream sidecars/chapters read.
                 # A changed paragraph number, row ID, speaker tag or lock/tech edit must stale the export too.
-                base_role = self.base_roles[i] if i < len(self.base_roles) else ""
-                identity.append([uid_snapshots[i], [uid_snapshots[j] for j in chain], row, base_role, it[1]])
+                base_roles = [self.base_roles[j] if j < len(self.base_roles) else "" for j in chain]
+                chain_rows = [row_snapshots[j] for j in chain]
+                identity.append([uid_snapshots[i], [uid_snapshots[j] for j in chain], chain_rows, base_roles, it[1]])
             export_config = [getattr(self, "speed", 1.0), getattr(self, "fmt", ""),
                              getattr(self, "bitrate", ""), getattr(self, "title", ""),
-                             getattr(self, "author", ""), self.asm_sig()]
+                             getattr(self, "author", ""), roles_snapshot, self.asm_sig()]
             ver = sha(jd([identity, export_config]) + "|" + "|".join(f"{it[4]}:{it[5]}" for it in items)
                       + (f"|+{aft}" if aft else ""), 16)
         if not want_audio:
@@ -3407,7 +3408,7 @@ class Studio:
                 with self.lock:
                     self._assert_export_current(a, b, meta, anchors)
                     current_chapter = self.chapters.get(c)
-                    if not current_chapter or current_chapter[:2] != (a, b) or current_chapter[2] != title:
+                    if not current_chapter or tuple(current_chapter[:2]) != (a, b) or current_chapter[2] != title:
                         raise Oops(f"границы главы {c} изменились во время экспорта; старый готовый файл сохранён.")
                     write_atomic(staged_tech, self._tech_txt(meta, title))
                     op.stage("сведение со звуками и музыкой")
