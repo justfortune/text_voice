@@ -1568,7 +1568,6 @@ def _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed)
         "format": fmt,
         "speed": float(speed),
         "pauses": PAUSE,
-        "pauses": PAUSE,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -1589,7 +1588,7 @@ def _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt="m4b",
     # Keep the entire validated suffix: a crash during rebuilding an early part must not
     # truncate index records for later, already-existing output files.
     frozen = [dict(part) for part in saved_index]
-planned_count = len(parts)
+    planned_count = len(parts)
     if len(saved_index) > planned_count:
         raise ValueError("work/parts.json содержит больше частей, чем текущий план; старый индекс и файлы сохранены, "
                          "автоматическое усечение запрещено")
