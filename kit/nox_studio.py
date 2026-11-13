@@ -1537,6 +1537,15 @@ class Studio:
             span = self._part_span(p.get("n", q + 1))
             if span is not None:
                 ia, ib = span
+                # Карта времени могла остаться от другой редакции/переразбивки книги.
+                # UID обычно защищает от этого, но проверяем и реальные hash-WAV границы
+                # из parts.json: не переносим старый диапазон на чужие строки с теми же позициями.
+                if (not (0 <= ia <= ib < len(self.wavs))
+                        or self.wavs[ia].stem != p.get("start")
+                        or self.wavs[ib].stem != p.get("end")):
+                    span = None
+            if span is not None:
+                ia, ib = span
                 if ib < a:
                     continue                               # часть целиком до нашей границы
                 if ia > a:
