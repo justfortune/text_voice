@@ -5882,6 +5882,7 @@ class Studio:
                         except Exception:
                             log("проект загружен, но библиотека звуков обновлена не полностью:\\n" + traceback.format_exc(), "warn")
                     if pst:
+                        stress_before = None if self.stress is None else dict(self.stress)
                         try:
                             cur_st = self.stress_load()
                             fresh = {u: v for u, v in pst.items() if u not in cur_st}
@@ -5889,6 +5890,9 @@ class Studio:
                                 cur_st.update(fresh)
                                 write_atomic(self.dir / "stress.json", jd(cur_st))
                         except Exception:
+                            # stress_load() кеширует словарь; при неудачной записи не оставляем
+                            # в памяти импорт, которого нет на диске.
+                            self.stress = stress_before
                             log("проект загружен, но словарь ударений обновлён не полностью:\\n" + traceback.format_exc(), "warn")
                     counts = self.project_counts(self.store)
                 op.note = (f"правок фраз {counts['edits']}, вставок {counts['ins']}; записей добавлено {stat['added']}, уже было {stat['have']}"
