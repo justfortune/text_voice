@@ -3762,7 +3762,11 @@ class Studio:
                     st = f.stat()
                 except OSError:
                     break
-                file_sig.append((num, st.st_size, st.st_mtime_ns))
+                try:
+                    digest = sha(f.read_bytes(), 16)
+                except OSError:
+                    break
+                file_sig.append((num, st.st_size, st.st_mtime_ns, digest))
             file_sig = tuple(file_sig)
             if (time.time() - self._clock[0] < 30
                     and getattr(self, "_clock_sig", None) == file_sig):
