@@ -205,7 +205,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             parts = Path(td)
             (parts / "part_01.times.tsv").write_text(
-                "00:00.0\t00:01.0\t1\tnarrator\\old-voice\\old edition text\t0.000\t1.000\\n",
+                "00:00.0\t00:01.0\t1\tnarrator\told-voice\told edition text\t0.000\t1.000\n",
                 encoding="utf-8",
             )
             s = self._clock_studio(parts, ["new edition text"])
@@ -223,7 +223,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             parts = Path(td)
             time_map = parts / "part_01.times.tsv"
-            line = "00:00.0\t00:01.0\t1\tnarrator\\voice-1\\first\t0.000\t1.000\\n"
+            line = "00:00.0\t00:01.0\t1\tnarrator\tvoice-1\tfirst\t0.000\t1.000\n"
             time_map.write_text(line, encoding="utf-8")
             s = self._clock_studio(parts, ["first"])
 
