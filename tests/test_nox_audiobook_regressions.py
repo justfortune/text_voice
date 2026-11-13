@@ -199,6 +199,9 @@ class BookEditionSnapshotTests(unittest.TestCase):
                 roles_path.write_text('{"roles":{"narrator":{"voice":"new"}}}', encoding="utf-8")
                 index_path.write_text("[]", encoding="utf-8")
                 (parts / "part_01.times.tsv").write_text("changed map", encoding="utf-8")
+                replacement = parts / "part_01.new"
+                replacement.write_bytes(b"new-edition-audio")
+                os.replace(replacement, parts / "part_01.m4b")
 
                 second = n._snapshot_current_edition()
 
@@ -207,8 +210,11 @@ class BookEditionSnapshotTests(unittest.TestCase):
             self.assertIn("original", original_roles)
             self.assertEqual("1", json.loads(original_index)[0]["start_id"])
             self.assertIn("old edition", original_map)
-            self.assertEqual(b"previous-book-audio", (parts / "part_01.m4b").read_bytes())
+            self.assertEqual(b"new-edition-audio", (parts / "part_01.m4b").read_bytes())
+            self.assertEqual(b"previous-book-audio", (snapshot / "parts" / "part_01.m4b").read_bytes())
             self.assertEqual(False, manifest["audio_copied"])
+            self.assertEqual("parts/part_01.m4b", manifest["audio_preservation"][0]["path"])
+            self.assertIn(manifest["audio_preservation"][0]["method"], ("hardlink", "copy"))
             self.assertEqual([{
                 "path": "parts/part_01.m4b",
                 "size": len(b"previous-book-audio"),
