@@ -433,6 +433,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
             s.lock = threading.RLock()
             s.rlock = threading.RLock()
             s.final_parts = final_dir
+            s.render_dir = root / "render"
             s.fmt = "m4b"
             s.title = "Book"
             s.rows = [{"ch_title": "Chapter"}]
