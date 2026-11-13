@@ -122,8 +122,14 @@ class LoadRowsFailurePolicyTests(unittest.TestCase):
         self.assertEqual(1, len(s.store["orphans"]))
 
     def test_non_strict_reload_keeps_existing_runtime_fallback(self):
+        import types
         s = self._studio()
-        fake_n = self._source(lambda roles: (_ for _ in ()).throw(OSError("voice stems unavailable")))
+        fake_n = types.SimpleNamespace(
+            CSV_PATH=Path("missing-segments.csv"),
+            ROLES_PATH=Path("missing-roles.json"),
+            load_rows=lambda: (_ for _ in ()).throw(OSError("segments temporarily unavailable")),
+            load_roles=lambda: {},
+        )
         with patch.object(studio, "n", fake_n):
             self.assertFalse(s.load_rows(force=True))
         self.assertEqual([{"id": "old"}], s.rows)
