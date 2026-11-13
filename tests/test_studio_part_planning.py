@@ -127,9 +127,6 @@ class PipelinePartIndexCompatibilityTests(unittest.TestCase):
                 self.assertEqual([(0, 1)], s.pipeline_parts(0))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class CrossPartSynchronizationTests(unittest.TestCase):
     def test_book_clock_accumulates_time_maps_across_consecutive_parts(self):
@@ -187,3 +184,7 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         self.assertEqual(0.5, result[0])
         self.assertEqual(2.0, result[1])
         self.assertTrue(result[3])
+
+
+if __name__ == "__main__":
+    unittest.main()
