@@ -474,6 +474,7 @@ class Studio:
         self._cstat = (0.0, None)                # размер кэша студии (считается не чаще раза в две минуты)
         self._seen = {}                          # часть -> когда её открывали в окне (её предпросмотр не убирать)
         self._clock = (0.0, {})
+        self._clock_sig = None
         self._wseen = set()
         self.check = None                        # итог самопроверки
         self.engine2, self.e2_busy, self.e2_tried, self.e1_at = None, 0.0, 0.0, 0.0
@@ -561,7 +562,7 @@ class Studio:
             rows, keys, uids, pidx = self.splice_ins(rows, keys, uids, ins, roles)
         with self.lock:
             row_attrs = ("rows", "roles", "keys", "uids", "pidx", "sidx", "idx_of", "id2i", "_spans",
-                         "_clock", "stems", "base_roles", "role_cnt", "wavs", "chapters", "rows_sig", "rows_at", "_abs")
+                         "_clock", "_clock_sig", "stems", "base_roles", "role_cnt", "wavs", "chapters", "rows_sig", "rows_at", "_abs")
             missing = object()
             previous_rows = {key: getattr(self, key, missing) for key in row_attrs}
             previous_store = self.store
@@ -574,6 +575,7 @@ class Studio:
                 self.id2i = {r["id"]: i for i, r in enumerate(rows)}
                 self._spans = {}
                 self._clock = (0.0, {})
+                self._clock_sig = None
                 self.stems = n.voice_stems(roles)
                 self.base_roles = [self._role_of(r, roles) for r in rows]
                 self.role_cnt = collections.Counter(self.base_roles)
@@ -1841,7 +1843,17 @@ class Studio:
                 # «пауза после фразы» — ровно столько секунд в готовом файле (общий множитель пауз книги её не меняет)
                 aft = int(round(1000 * float(ef.get("after") or 0) * (self.speed or 1.0)))
             chains = {it[0]: self.chain(it[0]) for it in items} if self._abs else {}
-        ver = sha("|".join(f"{it[4]}:{it[5]}" for it in items) + (f"|+{aft}" if aft else "") + self.asm_sig(), 16)
+        # The processed-audio key intentionally ignores book position so identical speech can share a WAV cache.
+        # Render metadata, however, contains UID anchors and must not be reused for another edition/segment mapping.
+        identity = []
+        for it in items:
+            i = it[0]
+            chain = chains.get(i) or [i]
+            r = self.rows[i]
+            identity.append([self.uids[i], [self.uids[j] for j in chain], r.get("chapter"),
+                             r.get("ch_title") if r.get("kind") == "head" else None])
+        ver = sha(jd(identity) + "|" + "|".join(f"{it[4]}:{it[5]}" for it in items)
+                  + (f"|+{aft}" if aft else "") + self.asm_sig(), 16)
         if not want_audio:
             return {"ver": ver, "items": items}, None
         done = self._proc_many(items, op)
@@ -3654,33 +3666,78 @@ class Studio:
         return self.sound_path(self.cue_ref(c))
 
     def book_clock(self) -> dict:
-        """Сквозное время книги по собранным частям конвейера: номер строки -> (начало, конец) в секундах от начала
-        книги. По нему фон и музыка, начавшиеся в прошлой части, продолжаются с того же места, а не с начала файла."""
-        if time.time() - self._clock[0] < 30:
-            return self._clock[1]
-        ck, off, num = {}, 0.0, 1
-        while num < 2000:
-            try:
-                lines = (n.PARTS / f"part_{num:02d}.times.tsv").read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
-                break
-            last = 0.0
-            for ln in lines:
-                c = ln.split("\t")
-                if len(c) < 8:
-                    continue
+        """Сквозное время книги по картам частей. Устаревшая карта не должна привязаться к повторно
+        использованным числовым ID после переразбивки или сдвинуть время следующих частей."""
+        with self.lock:
+            # Cache by file identity as well as age: a new export must invalidate the clock immediately,
+            # not after the old 30-second TTL expires.
+            file_sig = []
+            for num in range(1, 2000):
+                f = n.PARTS / f"part_{num:02d}.times.tsv"
                 try:
-                    t0, t1 = float(c[6]), float(c[7])
-                except ValueError:
-                    continue
-                i = self.id2i.get(c[2])
-                if i is not None:
+                    st = f.stat()
+                except OSError:
+                    break
+                file_sig.append((num, st.st_size, st.st_mtime_ns))
+            file_sig = tuple(file_sig)
+            if (time.time() - self._clock[0] < 30
+                    and getattr(self, "_clock_sig", None) == file_sig):
+                return self._clock[1]
+
+            ck, off, num = {}, 0.0, 1
+            while num < 2000:
+                try:
+                    lines = (n.PARTS / f"part_{num:02d}.times.tsv").read_text(encoding="utf-8").splitlines()
+                except (OSError, UnicodeDecodeError):
+                    break
+                part_map, last = {}, 0.0
+                prev_i, prev_t0 = -1, -1.0
+                invalid = False
+                for ln in lines:
+                    if not ln.strip():
+                        continue
+                    c = ln.split("\\t")
+                    if len(c) < 8:
+                        invalid = True
+                        break
+                    try:
+                        t0, t1 = float(c[6]), float(c[7])
+                    except (TypeError, ValueError):
+                        invalid = True
+                        break
+                    i = self.id2i.get(c[2])
+                    if (i is None or not (0 <= i < len(self.rows)) or i <= prev_i
+                            or t0 < 0 or t1 < t0 or t0 < prev_t0
+                            or t0 != t0 or t1 != t1 or abs(t0) == float("inf") or abs(t1) == float("inf")):
+                        invalid = True
+                        break
+                    # times.tsv carries the source stem, role and text as independent identity checks.
+                    # Numeric segment IDs are sequential and may be reused by a newly segmented edition.
+                    try:
+                        src = self.src(i)
+                        expected_stem = src["path"].stem if src.get("path") is not None else "-"
+                        expected_text = self.row_text(i)[:120]
+                        expected_role = self.eff(i).get("role")
+                    except Exception:
+                        invalid = True
+                        break
+                    if c[4] != expected_stem or c[5] != expected_text or c[3] != expected_role:
+                        invalid = True
+                        break
+                    part_map[i] = (t0, t1)
+                    prev_i, prev_t0 = i, t0
+                    last = max(last, t1)
+                # Fail closed for a mixed/old map. Do not use even its matching rows: their local offsets
+                # may have shifted, and later parts cannot be placed on a trustworthy global clock.
+                if invalid or not part_map:
+                    break
+                for i, (t0, t1) in part_map.items():
                     ck[i] = (off + t0, off + t1)
-                last = max(last, t1)
-            off += last + 1.0
-            num += 1
-        self._clock = (time.time(), ck)
-        return ck
+                off += last + 1.0
+                num += 1
+            self._clock = (time.time(), ck)
+            self._clock_sig = file_sig
+            return ck
 
     def cue_lead(self, c: dict, i: int, a: int) -> float:
         """Звук начался раньше отрезка (в прошлой части): сколько секунд он уже отыграл к началу отрезка. Неизвестно
@@ -3700,7 +3757,9 @@ class Studio:
         if i is None:
             return None
         ie = self.idx_of.get(c.get("e_uid")) if c.get("e_uid") else None
-        if (ie if ie is not None else i) < a or i > b:
+        # A finite cue without an end anchor (typically a short SFX) can still cross a part boundary.
+        # Only an explicit end anchor strictly before this part makes it irrelevant here.
+        if (ie is not None and ie < a) or i > b:
             return None
         cont = i < a
         if cont:
@@ -3727,7 +3786,13 @@ class Studio:
                         ln = max(0.05, len(self.snd(p)) / SND_SR - float(c.get("foff") or 0))
                     except Exception:
                         pass
-            t1 = t0 + float(ln)
+            # cont is elapsed source time for a cue continued from an earlier part. Its remaining
+            # duration must shrink by that amount; otherwise the next part contains a silent tail.
+            elapsed = float(cont) if cont and not isinstance(cont, bool) and cont > 0.001 else 0.0
+            remaining = float(ln) - elapsed
+            if remaining <= 0.0:
+                return None
+            t1 = t0 + remaining
         if t1 > total:
             t1, cut = total, True
         return t0, max(t1, t0 + 0.05), cont, cut
