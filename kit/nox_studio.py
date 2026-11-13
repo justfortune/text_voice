@@ -3149,7 +3149,7 @@ class Studio:
             out.append(f"{mmss(t0 / sp)}  {who}: {ef['tech']}" + (f"   [{', '.join(tags)}]" if tags else ""))
         return "\n".join(out) + "\n"
 
-    def _assert_export_current(self, a: int, b: int, meta: dict):
+    def _assert_export_current(self, a: int, b: int, meta: dict, anchors=None):
         """Refuse to publish a render if rows/settings changed while the expensive encoding ran.
 
         Call while holding self.lock. timeline() uses the same RLock, so this comparison and
@@ -3159,11 +3159,15 @@ class Studio:
         if current.get("ver") != meta.get("ver"):
             raise Oops("книга или параметры сборки изменились во время экспорта; старый готовый файл сохранён. "
                        "Запустите сборку ещё раз для текущей редакции.")
+        if anchors and any(self.idx_of.get(uid) != index for uid, index in anchors):
+            raise Oops("границы части или главы изменились во время экспорта; старый готовый файл сохранён.")
 
     def export_part(self, k: int) -> dict:
-        p = self.open_part(k)
-        a, b = p["a"], p["b"]
-        name = f"{self.title} — часть {k:02d} ({self.rows[a]['ch_title']})"
+        with self.lock:
+            p = self.open_part(k)
+            a, b = p["a"], p["b"]
+            anchors = ((self.uids[a], a), (self.uids[b], b))
+            name = f"{self.title} — часть {k:02d} ({self.rows[a]['ch_title']})"
         out = self.final_parts / f"part_{k:02d}.{self.fmt}"
         stage_dir = out.parent / f".{out.stem}.stage-{secrets.token_hex(8)}"
         stage_dir.mkdir(parents=True, exist_ok=False)
@@ -3176,13 +3180,15 @@ class Studio:
                 meta["ref"] = round(active_rms(audio), 5)
                 staged_times = stage_dir / f"part_{k:02d}.times.tsv"
                 staged_tech = stage_dir / f"part_{k:02d}.tech.txt"
-                write_atomic(staged_times, self._times_tsv(meta))
-                write_atomic(staged_tech, self._tech_txt(meta, f"часть {k:02d}"))
                 mf = self.render_dir / f"part_{k:02d}.json"
                 staged_meta = stage_dir / mf.name
 
                 with self.lock:
-                    self._assert_export_current(a, b, meta)
+                    self._assert_export_current(a, b, meta, anchors)
+                    if k < 1 or k > len(self.store["parts"]) or self.store["parts"][k - 1].get("last") != anchors[1][0]:
+                        raise Oops(f"граница части {k} изменилась во время экспорта; старый готовый файл сохранён.")
+                    write_atomic(staged_times, self._times_tsv(meta))
+                    write_atomic(staged_tech, self._tech_txt(meta, f"часть {k:02d}"))
                     # Mixing reads cues and sound files from the mutable store. Keep the short
                     # publication/mix window locked so cue edits cannot be half-applied.
                     op.stage("сведение со звуками и музыкой")
@@ -3206,8 +3212,6 @@ class Studio:
 
                     ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, mix=mix, vars=vs,
                               csig=self.cues_sig(a, b), kv=2)
-                    if k < 1 or k > len(self.store["parts"]):
-                        raise Oops(f"часть {k} изменилась во время экспорта; готовый файл сохранён отдельно")
                     self.store["parts"][k - 1]["export"] = ex
                     self.save(f"собрана готовая часть {k}", {"file": str(out), "dur": ex["dur"]})
             return ex
@@ -3385,7 +3389,9 @@ class Studio:
         return self.export_chapter(c)
 
     def export_chapter(self, c: int) -> dict:
-        a, b, title = self.chapter_range(c)
+        with self.lock:
+            a, b, title = self.chapter_range(c)
+            anchors = ((self.uids[a], a), (self.uids[b], b))
         out = self.final_ch / f"{c:02d} {safe_file(title)}.{self.fmt}"
         stage_dir = out.parent / f".{out.stem}.stage-{secrets.token_hex(8)}"
         stage_dir.mkdir(parents=True, exist_ok=False)
@@ -3397,10 +3403,13 @@ class Studio:
                 total = self._encode(audio, meta["sr"], meta["chapters"], staged_voice, f"{self.title} — {title}")
                 meta["ref"] = round(active_rms(audio), 5)
                 staged_tech = stage_dir / out.with_suffix(".tech.txt").name
-                write_atomic(staged_tech, self._tech_txt(meta, title))
 
                 with self.lock:
-                    self._assert_export_current(a, b, meta)
+                    self._assert_export_current(a, b, meta, anchors)
+                    current_chapter = self.chapters.get(c)
+                    if not current_chapter or current_chapter[:2] != (a, b) or current_chapter[2] != title:
+                        raise Oops(f"границы главы {c} изменились во время экспорта; старый готовый файл сохранён.")
+                    write_atomic(staged_tech, self._tech_txt(meta, title))
                     op.stage("сведение со звуками и музыкой")
                     vs = self._export_mixes(a, b, meta, staged_voice, "glavy", f"{self.title} — {title}",
                                             audio=audio, sr=meta["sr"], op=op)
