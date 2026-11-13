@@ -238,6 +238,27 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         self.assertEqual((0.0, 1.0), first[0])
         self.assertEqual((0.0, 2.0), second[0])
 
+    def test_book_clock_invalidates_when_same_size_map_changes_without_mtime_change(self):
+        import os
+        import types
+
+        with tempfile.TemporaryDirectory() as td:
+            parts = Path(td)
+            time_map = parts / "part_01.times.tsv"
+            line = "00:00.0\t00:01.0\t1\tnarrator\tvoice-1\tfirst\t0.000\t1.000\n"
+            time_map.write_text(line, encoding="utf-8")
+            s = self._clock_studio(parts, ["first"])
+
+            with patch.object(studio, "n", types.SimpleNamespace(PARTS=parts)):
+                first = s.book_clock()
+                st = time_map.stat()
+                time_map.write_text(line.replace("1.000", "2.000"), encoding="utf-8")
+                os.utime(time_map, ns=(st.st_atime_ns, st.st_mtime_ns))
+                second = s.book_clock()
+
+        self.assertEqual((0.0, 1.0), first[0])
+        self.assertEqual((0.0, 2.0), second[0])
+
     def test_finite_sfx_continues_across_part_boundary_with_remaining_duration(self):
         s = studio.Studio.__new__(studio.Studio)
         s.idx_of = {"before": 0, "inside": 1}
