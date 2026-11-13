@@ -3186,12 +3186,11 @@ class Studio:
 
                 with self.lock:
                     self._assert_export_current(a, b, meta, anchors)
-                    if k < 1 or k > len(self.store["parts"]) or self.store["parts"][k - 1].get("last") != anchors[1][0]:
+                    if (k < 1 or k > len(self.store["parts"])
+                            or self.store["parts"][k - 1].get("last") != anchors[1][0]):
                         raise Oops(f"граница части {k} изменилась во время экспорта; старый готовый файл сохранён.")
                     write_atomic(staged_times, self._times_tsv(meta))
                     write_atomic(staged_tech, self._tech_txt(meta, f"часть {k:02d}"))
-                    # Mixing reads cues and sound files from the mutable store. Keep the short
-                    # publication/mix window locked so cue edits cannot be half-applied.
                     op.stage("сведение со звуками и музыкой")
                     vs = self._export_mixes(a, b, meta, staged_voice, "chasti", name,
                                             audio=audio, sr=meta["sr"], op=op)
@@ -3199,9 +3198,7 @@ class Studio:
                     if (read_json(mf, None) or {}).get("ver") != meta["ver"]:
                         write_atomic(staged_meta, jd(meta))
 
-                    # All expensive voice encoding happened in a unique staging directory.
-                    # The old final voice and its sidecars remain intact if rendering or freshness
-                    # validation fails before this point.
+                    # Publish only after the current edition has been revalidated under the state lock.
                     os.replace(staged_voice, out)
                     os.replace(staged_times, out.with_name(f"part_{k:02d}.times.tsv"))
                     os.replace(staged_tech, out.with_name(f"part_{k:02d}.tech.txt"))
@@ -3218,34 +3215,6 @@ class Studio:
             return ex
         finally:
             shutil.rmtree(stage_dir, ignore_errors=True)
-
-        p = self.open_part(k)
-        name = f"{self.title} — часть {k:02d} ({self.rows[p['a']]['ch_title']})"
-        with self.rlock, Op(self, f"готовая часть {k}") as op:
-            meta, audio = self.timeline(p["a"], p["b"], True, op)
-            out = self.final_parts / f"part_{k:02d}.{self.fmt}"
-            op.stage(f"запись {self.fmt} с выравниванием громкости")
-            total = self._encode(audio, meta["sr"], meta["chapters"], out, name)
-            write_atomic(out.with_name(f"part_{k:02d}.times.tsv"), self._times_tsv(meta))
-            write_atomic(out.with_name(f"part_{k:02d}.tech.txt"), self._tech_txt(meta, f"часть {k:02d}"))
-            meta["ref"] = round(active_rms(audio), 5)          # та же опорная громкость голоса, что в предпросмотре
-            mf = self.render_dir / f"part_{k:02d}.json"
-            if (read_json(mf, None) or {}).get("ver") != meta["ver"]:
-                # часть могли ни разу не открывать в окне (её принял автомат «вся книга»): длина и версия — для списка частей;
-                # сам предпросмотр соберётся, когда часть откроют
-                write_atomic(mf, jd(meta))
-            op.stage("сведение со звуками и музыкой")
-            vs = self._export_mixes(p["a"], p["b"], meta, out, "chasti", name, audio=audio, sr=meta["sr"], op=op)
-            mix = vs.get("all")
-            op.stage("копия на Яндекс Диск")
-            disk = self._to_disk(out, "chasti")
-            op.note = self._export_note(out, total, mix, disk, vs)
-        with self.lock:
-            ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, mix=mix, vars=vs,
-                      csig=self.cues_sig(p["a"], p["b"]), kv=2)
-            self.store["parts"][k - 1]["export"] = ex
-            self.save(f"собрана готовая часть {k}", {"file": str(out), "dur": ex["dur"]})
-        return ex
 
     def ffmpeg(self) -> str:
         return (n.find_ffmpeg() if hasattr(n, "find_ffmpeg") else None) or shutil.which("ffmpeg") or "ffmpeg"
