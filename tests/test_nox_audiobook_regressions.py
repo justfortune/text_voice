@@ -218,7 +218,7 @@ class BookEditionSnapshotTests(unittest.TestCase):
             self.assertEqual([{
                 "path": "parts/part_01.m4b",
                 "size": len(b"previous-book-audio"),
-                "sha256": n._file_sha256(parts / "part_01.m4b"),
+                "sha256": n._file_sha256(snapshot / "parts" / "part_01.m4b"),
             }], manifest["outputs_kept_in_place"])
 
     def test_corrupt_existing_edition_snapshot_stops_before_source_replacement(self):
