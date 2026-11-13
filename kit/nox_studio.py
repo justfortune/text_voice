@@ -6661,7 +6661,7 @@ class Studio:
                     kit=self.kit_score() is not None, since=a.get("since") or "", ch_busy=self.ch_busy,
                     stamp=a.get("stamp") or "", disk=self.disk_dir(False),
                     vars=[dict(id=v[0], name=v[3], on=bool((self.store["mix"].get("vars") or {}).get(v[0], True))) for v in MIX_VARS],
-                    done=parts_done and not chapters_pending)
+                    parts_done=parts_done, done=parts_done and not chapters_pending)
 
     def _auto_set(self, say=True, **kw):
         with self.lock:
