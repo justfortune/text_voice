@@ -23,40 +23,6 @@ def make_studio(uids, segs, pidx=None):
 
 class LoadRowsFailurePolicyTests(unittest.TestCase):
     def _studio(self):
-        s = studio.Studio.__new__(studio.Studio)
-        s.rows = [{"id": "existing"}]
-        s.rows_sig = None
-        s.rows_at = 0
-        return s
-
-    def test_strict_reload_raises_instead_of_silently_reusing_old_rows(self):
-        import types
-        s = self._studio()
-        fake_n = types.SimpleNamespace(
-            CSV_PATH=Path("missing-segments.csv"),
-            ROLES_PATH=Path("missing-roles.json"),
-            load_rows=lambda: (_ for _ in ()).throw(OSError("segments temporarily unavailable")),
-        )
-        with patch.object(studio, "n", fake_n):
-            with self.assertRaisesRegex(studio.Oops, "segments temporarily unavailable"):
-                s.load_rows(force=True, strict=True)
-        self.assertEqual([{"id": "existing"}], s.rows)
-
-    def test_non_strict_reload_keeps_existing_runtime_fallback(self):
-        import types
-        s = self._studio()
-        fake_n = types.SimpleNamespace(
-            CSV_PATH=Path("missing-segments.csv"),
-            ROLES_PATH=Path("missing-roles.json"),
-            load_rows=lambda: (_ for _ in ()).throw(OSError("segments temporarily unavailable")),
-        )
-        with patch.object(studio, "n", fake_n):
-            self.assertFalse(s.load_rows(force=True))
-        self.assertEqual([{"id": "existing"}], s.rows)
-
-
-class LoadRowsFailurePolicyTests(unittest.TestCase):
-    def _studio(self):
         import threading
         s = studio.Studio.__new__(studio.Studio)
         s.lock = threading.RLock()
@@ -94,6 +60,20 @@ class LoadRowsFailurePolicyTests(unittest.TestCase):
             voice_stems=voice_stems,
         )
         return fake_n
+
+    def test_strict_reload_raises_when_source_rows_cannot_be_read(self):
+        import types
+        s = self._studio()
+        fake_n = types.SimpleNamespace(
+            CSV_PATH=Path("missing-segments.csv"),
+            ROLES_PATH=Path("missing-roles.json"),
+            load_rows=lambda: (_ for _ in ()).throw(OSError("segments temporarily unavailable")),
+            load_roles=lambda: {},
+        )
+        with patch.object(studio, "n", fake_n):
+            with self.assertRaisesRegex(studio.Oops, "segments temporarily unavailable"):
+                s.load_rows(force=True, strict=True)
+        self.assertEqual([{"id": "old"}], s.rows)
 
     def test_strict_reload_rolls_back_all_derived_state_when_refresh_fails(self):
         s = self._studio()
