@@ -153,7 +153,7 @@ class ProjectAudioIdentityTests(unittest.TestCase):
         }
         s.project_save = Mock()
 
-        with self.assertRaisesRegex(studio.Oops, "совпадают с местными по имени и размеру"):
+        with self.assertRaisesRegex(studio.Oops, "другое или неподтверждённое содержимое"):
             s._project_load(self.root / "external.noxproj")
 
         s.project_save.assert_not_called()
