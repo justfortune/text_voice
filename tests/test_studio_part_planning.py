@@ -96,6 +96,17 @@ class PipelinePartIndexCompatibilityTests(unittest.TestCase):
                 {"n": 2, "a": 2, "b": 3, "opened": False},
             ], planned)
 
+    def test_stale_time_map_is_rejected_when_audio_boundary_identity_disagrees(self):
+        with tempfile.TemporaryDirectory() as td:
+            s, pipeline = self._studio_with_index(td, [
+                {"n": 1, "start_id": "1", "end_id": "2", "start": "a", "end": "b"},
+            ])
+            # Simulate a surviving timeline map from an older book layout:
+            # its row positions now point at b..c, not this part's a..b audio.
+            with patch.object(studio, "n", pipeline), \\
+                 patch.object(s, "_part_span", return_value=(1, 2)):
+                self.assertEqual([(0, 1)], s.pipeline_parts(0))
+
     def test_legacy_parts_index_with_sig_remains_supported(self):
         with tempfile.TemporaryDirectory() as td:
             s, pipeline = self._studio_with_index(td, [
