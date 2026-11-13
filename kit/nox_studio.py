@@ -1753,7 +1753,10 @@ class Studio:
                 np.save(tmp, x)
                 os.replace(tmp, cp)
             finally:
-                tmp.unlink(missing_ok=True)
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return x
         # Счёт букв и поиск пауз — по тому же тексту, что у конвейера (исходная фраза): копия черновой записи и дубль
         # с поправленным ударением обрабатываются точно как черновик. Только если в дубле другие СЛОВА — по прочитанному.
@@ -1788,7 +1791,10 @@ class Studio:
             np.save(tmp, x)
             os.replace(tmp, cp)
         finally:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
         return x
 
     def eq_for(self, i: int) -> dict:
@@ -1889,7 +1895,7 @@ class Studio:
                 ws = [max(1, len(n.RE_RU_LETTERS.sub("", row_snapshots[j]["text"]))) for j in ch]
                 tot, acc, ln = float(sum(ws)), ws[0], len(x) / sr
                 for j, w in zip(ch[1:], ws[1:]):
-                    segs.append([self.uids[j], round(t + ln * acc / tot, 3), round(t + ln * (acc + w) / tot, 3)])
+                    segs.append([uid_snapshots[j], round(t + ln * acc / tot, 3), round(t + ln * (acc + w) / tot, 3)])
                     acc += w
             pieces.append(x)
             t += len(x) / sr
