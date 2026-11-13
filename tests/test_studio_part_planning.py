@@ -407,6 +407,63 @@ class CrossPartSynchronizationTests(unittest.TestCase):
         self.assertNotEqual(baseline, paragraph_changed)
 
 
+    def test_export_aborts_on_edition_change_without_replacing_previous_final_file(self):
+        import threading
+
+        class FakeOp:
+            def __init__(self, *_args):
+                self.note = ""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def stage(self, *_args):
+                return None
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            final_dir = root / "final"
+            final_dir.mkdir()
+            output = final_dir / "part_01.m4b"
+            output.write_bytes(b"previous-valid-export")
+            s = studio.Studio.__new__(studio.Studio)
+            s.lock = threading.RLock()
+            s.rlock = threading.RLock()
+            s.final_parts = final_dir
+            s.fmt = "m4b"
+            s.title = "Book"
+            s.rows = [{"ch_title": "Chapter"}]
+            s.uids = ["same-boundary.0"]
+            s.open_part = lambda _k: {"a": 0, "b": 0}
+            timeline_calls = []
+
+            def timeline(_a, _b, want_audio, _op=None):
+                timeline_calls.append(want_audio)
+                if want_audio:
+                    return {"ver": "old-edition", "sr": 24000, "chapters": [], "segs": []}, [0.1, 0.2]
+                return {"ver": "new-edition"}, None
+
+            def encode(_audio, _sr, _chapters, staged_path, _name):
+                staged_path.write_bytes(b"new-but-stale-export")
+                return 12.0
+
+            s.timeline = timeline
+            s._encode = encode
+            s._export_mixes = lambda *_a, **_k: self.fail("mixing must not run for a stale edition")
+
+            with patch.object(studio, "Op", FakeOp), patch.object(studio, "active_rms", return_value=0.5):
+                with self.assertRaisesRegex(studio.Oops, "изменились во время экспорта"):
+                    s.export_part(1)
+
+            self.assertEqual([True, False], timeline_calls)
+            self.assertEqual(b"previous-valid-export", output.read_bytes())
+            self.assertEqual([output], list(final_dir.iterdir()))
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
