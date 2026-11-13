@@ -464,6 +464,52 @@ class GeneralUndoSaveRollbackTests(unittest.TestCase):
         self.assertEqual(history, s.undo)
 
 
+class UndoLockGuardTests(unittest.TestCase):
+    def _base(self):
+        import threading
+        s = studio.Studio.__new__(studio.Studio)
+        s.lock = threading.RLock()
+        s.idx_of = {"a": 0}
+        s._abs = {}
+        s.store = {"segs": {}, "ins": []}
+        s.undo = []
+        s.joins_refresh = lambda: 0
+        s.save = lambda *args, **kwargs: None
+        s.rows_changed = lambda: None
+        return s
+
+    def test_phrase_undo_keeps_history_when_phrase_is_locked(self):
+        s = self._base()
+        s.store["segs"]["a"] = {
+            "sid": "sa",
+            "tech": "current wording",
+            "locked": {"at": "now", "take": "t001"},
+        }
+        s.undo = [("a", {"sid": "sa", "tech": "previous wording"}, "edit")]
+        history = list(s.undo)
+
+        with self.assertRaisesRegex(studio.Oops, "закреплённой фразе"):
+            s.undo_last()
+
+        self.assertEqual(history, s.undo)
+        self.assertEqual("current wording", s.store["segs"]["a"]["tech"])
+
+    def test_insert_undo_keeps_history_when_insert_is_locked(self):
+        s = self._base()
+        item = {"id": "ins-1", "text": "закреплённая вставка"}
+        s.store["ins"] = [item]
+        s.store["segs"]["ins-1"] = {"locked": {"at": "now", "take": "t001"}}
+        s.undo = [("#ins", studio.jd({"op": "add", "id": "ins-1"}), "insert")]
+        history = list(s.undo)
+
+        with self.assertRaisesRegex(studio.Oops, "вставка закреплена"):
+            s.undo_last()
+
+        self.assertEqual(history, s.undo)
+        self.assertEqual([item], s.store["ins"])
+        self.assertIn("ins-1", s.store["segs"])
+
+
 class GlueArtifactRollbackTests(unittest.TestCase):
     def test_metadata_failure_removes_only_new_glue_artifacts(self):
         import tempfile
