@@ -484,6 +484,189 @@ def _snapshot_current_edition():
         raise
 
 
+def _edition_active_path(rel: str) -> Path:
+    if rel == "segments.csv":
+        return CSV_PATH
+    if rel == "roles.json":
+        return ROLES_PATH
+    if rel == "parts.json":
+        return PARTS_INDEX
+    if re.fullmatch(r"parts/part_\\d+\\.times\\.tsv", rel):
+        return PARTS / Path(rel).name
+    if re.fullmatch(r"parts/part_\\d+\\.(?:m4b|m4a|mp3)", rel):
+        return PARTS / Path(rel).name
+    raise ValueError(f"недопустимый путь в архиве редакции: {rel!r}")
+
+
+def _validate_edition_snapshot(snapshot: Path) -> dict:
+    try:
+        manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"не читается манифест редакции {snapshot.name}: {e}") from e
+    if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+        raise ValueError(f"неподдерживаемая структура архива редакции: {snapshot.name}")
+    edition_id = str(manifest.get("edition_id") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", edition_id) or snapshot.name != f"edition_{edition_id[:20]}":
+        raise ValueError(f"неверный идентификатор архива редакции: {snapshot.name}")
+    records = manifest.get("files")
+    outputs = manifest.get("outputs_kept_in_place")
+    if not isinstance(records, list) or not isinstance(outputs, list):
+        raise ValueError(f"в манифесте редакции отсутствуют списки файлов: {snapshot.name}")
+    seen = set()
+    for record in records + outputs:
+        if not isinstance(record, dict):
+            raise ValueError(f"неверная запись файла в архиве: {snapshot.name}")
+        rel = record.get("path")
+        if not isinstance(rel, str) or rel in seen:
+            raise ValueError(f"повторный или неверный путь в архиве редакции: {rel!r}")
+        seen.add(rel)
+        active = _edition_active_path(rel)
+        archived = snapshot / Path(rel)
+        if not archived.is_file():
+            raise ValueError(f"в архиве редакции отсутствует файл: {rel}")
+        try:
+            size = int(record["size"])
+            digest = str(record["sha256"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"неверная контрольная запись файла: {rel}") from e
+        if size < 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError(f"неверная контрольная сумма файла: {rel}")
+        if archived.stat().st_size != size or _file_sha256(archived) != digest:
+            raise ValueError(f"контрольная сумма файла в архиве редакции не совпала: {rel}")
+    return manifest
+
+
+def list_editions() -> list:
+    """Return valid immutable book-edition snapshots, newest name first."""
+    root = WORK / "editions"
+    result = []
+    if not root.is_dir():
+        return result
+    for snapshot in sorted(root.glob("edition_*"), reverse=True):
+        if not snapshot.is_dir():
+            continue
+        try:
+            manifest = _validate_edition_snapshot(snapshot)
+            result.append({
+                "id": str(manifest["edition_id"])[:20],
+                "edition_id": str(manifest["edition_id"]),
+                "captured_at": str(manifest.get("captured_at") or ""),
+                "files": len(manifest["files"]),
+                "parts": len(manifest["outputs_kept_in_place"]),
+                "path": str(snapshot),
+            })
+        except (OSError, ValueError) as e:
+            result.append({"id": snapshot.name.removeprefix("edition_"), "valid": False, "error": str(e)})
+    return result
+
+
+def _apply_edition_snapshot(snapshot: Path, manifest: dict):
+    """Apply one verified snapshot with a rollback set for in-process failures."""
+    desired = {record["path"]: snapshot / Path(record["path"])
+               for record in manifest["files"] + manifest["outputs_kept_in_place"]}
+    current = {}
+    for rel in ("segments.csv", "roles.json", "parts.json"):
+        active = _edition_active_path(rel)
+        if active.is_file():
+            current[rel] = active
+    if PARTS.is_dir():
+        for active in PARTS.glob("part_*"):
+            if not active.is_file():
+                continue
+            rel = f"parts/{active.name}"
+            try:
+                _edition_active_path(rel)
+            except ValueError:
+                continue
+            current[rel] = active
+
+    stage = WORK / f".restore-edition-{os.getpid()}-{time.time_ns()}"
+    staged, rollback = stage / "new", stage / "old"
+    try:
+        for folder in (staged, rollback):
+            folder.mkdir(parents=True, exist_ok=True)
+        for rel, source in desired.items():
+            dest = staged / Path(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, dest)
+        for rel, source in current.items():
+            dest = rollback / Path(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, dest)
+            except OSError:
+                shutil.copy2(source, dest)
+
+        try:
+            for rel in sorted(set(current) | set(desired)):
+                active = _edition_active_path(rel)
+                if rel in desired:
+                    active.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(staged / Path(rel), active)
+                elif active.exists():
+                    active.unlink()
+        except Exception:
+            # Restore the exact previous active set before propagating the failure.
+            for rel in sorted(set(current) | set(desired), reverse=True):
+                active = _edition_active_path(rel)
+                saved = rollback / Path(rel)
+                if saved.is_file():
+                    active.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(saved, active)
+                elif rel not in current and active.exists():
+                    active.unlink()
+            raise
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def restore_edition(edition_id: str) -> dict:
+    """Restore a previously snapshotted book definition, part maps and part audio safely."""
+    edition_id = str(edition_id or "").removeprefix("edition_")
+    if not re.fullmatch(r"[0-9a-f]{20}", edition_id):
+        raise ValueError("укажите первые 20 шестнадцатеричных символов ID редакции")
+    with _claim_guard(CSV_PATH):
+        root = WORK / "editions"
+        matches = list(root.glob(f"edition_{edition_id}")) if root.is_dir() else []
+        if len(matches) != 1 or not matches[0].is_dir():
+            raise ValueError(f"архив редакции {edition_id} не найден")
+        snapshot = matches[0]
+        manifest = _validate_edition_snapshot(snapshot)
+        previous = _snapshot_current_edition()
+        if previous == snapshot:
+            return {"restored": False, "already_current": True, "edition_id": manifest["edition_id"]}
+        _apply_edition_snapshot(snapshot, manifest)
+        return {
+            "restored": True,
+            "edition_id": manifest["edition_id"],
+            "previous_snapshot": str(previous) if previous else None,
+        }
+
+
+def _retire_snapshotted_parts(snapshot: Path):
+    """Clear old active part outputs only after verifying their immutable snapshot exists."""
+    manifest = _validate_edition_snapshot(snapshot)
+    for record in manifest["files"]:
+        if not str(record["path"]).startswith("parts/"):
+            continue
+        active = _edition_active_path(record["path"])
+        if active.exists():
+            if active.stat().st_size != record["size"] or _file_sha256(active) != record["sha256"]:
+                raise RuntimeError(f"файл части изменился после архивации, не удаляю его: {active.name}")
+            active.unlink()
+    for record in manifest["outputs_kept_in_place"]:
+        active = _edition_active_path(record["path"])
+        if active.exists():
+            if active.stat().st_size != record["size"] or _file_sha256(active) != record["sha256"]:
+                raise RuntimeError(f"готовое аудио изменилось после архивации, не удаляю его: {active.name}")
+            active.unlink()
+    if any(record["path"] == "parts.json" for record in manifest["files"]):
+        index_record = next(record for record in manifest["files"] if record["path"] == "parts.json")
+        if PARTS_INDEX.is_file() and _file_sha256(PARTS_INDEX) != index_record["sha256"]:
+            raise RuntimeError("work/parts.json изменился после архивации; активный индекс не сброшен")
+        _write_parts_index_atomic([])
+
+
 def _atomic_write_segments(rows):
     """Write a complete segments.csv before atomically replacing the previous one."""
     CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -677,6 +860,8 @@ def _segment_locked(docx_paths, max_chars: int):
     if previous_edition:
         print(f"Предыдущая редакция сохранена: {previous_edition}")
     _atomic_write_edition(rows, roles)
+    if previous_edition:
+        _retire_snapshotted_parts(previous_edition)
 
     # статистика
     conf_cnt = Counter(r["conf"] for r in rows if r["kind"] == "speech")
