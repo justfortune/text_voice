@@ -46,7 +46,9 @@ def make_completed_book(pending_chapters=()):
 class AutoBookCompletionTests(unittest.TestCase):
     def test_view_is_not_done_when_final_chapter_export_is_missing(self):
         s = make_completed_book([1])
-        self.assertFalse(s.auto_view()["done"])
+        view = s.auto_view()
+        self.assertTrue(view["parts_done"])
+        self.assertFalse(view["done"])
 
     def test_view_is_done_only_when_all_final_chapters_are_current(self):
         s = make_completed_book([])
