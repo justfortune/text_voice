@@ -415,13 +415,20 @@ def _snapshot_current_edition():
     records = []
     for rel, source in sources:
         records.append({"path": rel, "size": source.stat().st_size, "sha256": _file_sha256(source)})
-    identity = hashlib.sha256(json.dumps(records, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    outputs = []
+    for output in sorted(PARTS.glob("part_*")):
+        if output.is_file() and output.suffix.lower() in (".m4b", ".m4a", ".mp3"):
+            outputs.append({"path": f"parts/{output.name}", "size": output.stat().st_size,
+                            "sha256": _file_sha256(output)})
+    identity_data = {"files": records, "outputs_kept_in_place": outputs}
+    identity = hashlib.sha256(json.dumps(identity_data, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     target = editions / f"edition_{identity[:20]}"
 
     def verify(snapshot: Path):
         try:
             manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
-            if manifest.get("edition_id") != identity or manifest.get("files") != records:
+            if (manifest.get("edition_id") != identity or manifest.get("files") != records
+                    or manifest.get("outputs_kept_in_place") != outputs):
                 return False
             for record in records:
                 file_path = snapshot / Path(record["path"])
@@ -445,10 +452,6 @@ def _snapshot_current_edition():
             destination = tmp_dir / Path(record["path"])
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
-        outputs = []
-        for output in sorted(PARTS.glob("part_*")):
-            if output.is_file() and output.suffix.lower() in (".m4b", ".m4a", ".mp3"):
-                outputs.append({"path": f"parts/{output.name}", "size": output.stat().st_size})
         manifest = {
             "schema": 1,
             "edition_id": identity,
@@ -1547,6 +1550,7 @@ def _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed)
         "bitrate": bitrate,
         "format": fmt,
         "speed": float(speed),
+        "pauses": PAUSE,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
