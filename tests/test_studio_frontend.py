@@ -71,6 +71,11 @@ class StudioFrontendTests(unittest.TestCase):
         self.assertIn("NotFoundError", self.html)
         self.assertIn("audioCtx.close()", self.html)
 
+    def test_whole_book_dialog_distinguishes_missing_chapters_from_remaining_parts(self):
+        self.assertIn("a.parts_done", self.html)
+        self.assertIn("все части уже озвучены и закреплены", self.html)
+        self.assertIn("все файлы глав собраны и актуальны", self.html)
+
     def test_paragraph_recording_is_not_exposed_until_transactional_backend_exists(self):
         self.assertNotIn('recordOwn(s.uid, "para")', self.html)
         self.assertNotIn("ownParagraphRecord(", self.html)
