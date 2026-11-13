@@ -5664,12 +5664,18 @@ class Studio:
 
     def _proj_read(self, f: Path):
         import zipfile
+        zf = None
         try:
             zf = zipfile.ZipFile(f)
             m = json.loads(zf.read("manifest.json").decode("utf-8"))
             if m.get("format") != "noxproj":
                 raise ValueError
         except Exception:
+            if zf is not None:
+                try:
+                    zf.close()
+                except Exception:
+                    pass
             raise Oops(f"«{f.name}» не читается как файл проекта студии: он повреждён или это другой файл")
         try:
             if int(m.get("ver") or 0) > self.PROJ_FMT:
