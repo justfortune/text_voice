@@ -1872,10 +1872,15 @@ class Studio:
                 i = it[0]
                 chain = chains.get(i) or [i]
                 row = row_snapshots[i]
-                identity.append([uid_snapshots[i], [uid_snapshots[j] for j in chain], row.get("chapter"),
-                                 row.get("ch_title") if row.get("kind") == "head" else None])
-            ver = sha(jd(identity) + "|" + "|".join(f"{it[4]}:{it[5]}" for it in items)
-                      + (f"|+{aft}" if aft else "") + self.asm_sig(), 16)
+                # Include every row field and effective edit that downstream sidecars/chapters read.
+                # A changed paragraph number, row ID, speaker tag or lock/tech edit must stale the export too.
+                base_role = self.base_roles[i] if i < len(self.base_roles) else ""
+                identity.append([uid_snapshots[i], [uid_snapshots[j] for j in chain], row, base_role, it[1]])
+            export_config = [getattr(self, "speed", 1.0), getattr(self, "fmt", ""),
+                             getattr(self, "bitrate", ""), getattr(self, "title", ""),
+                             getattr(self, "author", ""), self.asm_sig()]
+            ver = sha(jd([identity, export_config]) + "|" + "|".join(f"{it[4]}:{it[5]}" for it in items)
+                      + (f"|+{aft}" if aft else ""), 16)
         if not want_audio:
             return {"ver": ver, "items": items}, None
         done = self._proc_many(items, op, row_snapshots=row_snapshots, roles_snapshot=roles_snapshot)
