@@ -1939,6 +1939,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    e = sub.add_parser("editions", help="список сохранённых редакций книги (CSV, роли, карта и готовые части)")
+    r = sub.add_parser("restore-edition", help="безопасно восстановить сохранённую редакцию книги и её таймлайн")
+    r.add_argument("edition_id", help="первые 20 hex-символов ID из команды editions")
+
+
     s = sub.add_parser("segment", help="один или несколько .docx по порядку -> work/segments.csv + work/roles.json")
     s.add_argument("docx", type=Path, nargs="+", help="главы склеиваются в указанном порядке")
     s.add_argument("--max-chars", type=int, default=MAX_CHARS)
@@ -1995,8 +2000,27 @@ def main():
 
     args = ap.parse_args()
     try:
-        if args.cmd == "segment":
+        if args.cmd == "editions":
+            editions = list_editions()
+            for item in editions:
+                if item.get("valid") is False:
+                    print(f"{item['id']}  ПОВРЕЖДЁН: {item['error']}")
+                else:
+                    print(f"{item['id']}  {item['captured_at']}  файлов: {item['files']}, частей: {item['parts']}")
+            if not editions:
+                print("Сохранённых редакций пока нет.")
+        elif args.cmd == "restore-edition":
+            result = restore_edition(args.edition_id)
+            if result.get("already_current"):
+                print(f"Редакция {result['edition_id'][:20]} уже активна.")
+            else:
+                print(f"Восстановлена редакция {result['edition_id'][:20]}.")
+                if result.get("previous_snapshot"):
+                    print(f"Текущая редакция предварительно сохранена: {result['previous_snapshot']}")
+                print("Перезапустите студию, чтобы она перечитала CSV, роли и таймкарты.")
+        elif args.cmd == "segment":
             segment(args.docx, args.max_chars)
+
         elif args.cmd == "cast":
             cast(args)
         elif args.cmd == "synth":
