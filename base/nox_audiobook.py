@@ -33,6 +33,8 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
+from contextlib import contextmanager
 from collections import Counter, OrderedDict
 from pathlib import Path
 
@@ -51,6 +53,7 @@ CHAPTERS = WORK / "chapters"
 PARTS = HERE / "parts"
 PARTS_INDEX = WORK / "parts.json"
 DUR_CACHE = WORK / "durations.json"
+_CLAIMS = threading.local()  # lock token is owned by the thread that claimed the WAV
 LOCK_STALE_SEC = 45 * 60   # «замок» старше этого без готового wav считается брошенным (упавший воркер)
 
 NARRATOR = "narrator"
@@ -653,56 +656,127 @@ def _pid_alive(pid: int):
         return None
 
 
-def claim(path: Path) -> bool:
-    """Атомарно занять WAV; неизвестный статус владельца означает отказ от перехвата."""
-    lock = path.with_suffix(".lock")
+@contextmanager
+def _claim_guard(path: Path):
+    """Короткая межпроцессная секция для проверки/перехвата lock-файла.
+
+    WAV lock остаётся совместимым со старым PID-only форматом. Guard-файл один
+    на каталог WAV и намеренно не удаляется: удаление inode при ожидающих процессах
+    разрушило бы взаимное исключение.
+    """
+    guard = path.parent / ".nox-claims.guard"
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    with open(guard, "a+b") as f:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                f.write(b"\\0")
+                f.flush()
+            f.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.02)
+            try:
+                yield
+            finally:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _claim_tokens() -> dict:
+    tokens = getattr(_CLAIMS, "tokens", None)
+    if tokens is None:
+        tokens = {}
+        _CLAIMS.tokens = tokens
+    return tokens
+
+
+def _write_claim(lock: Path, path: Path) -> bool:
+    """Создать lock с уникальным токеном. Вызывается только под _claim_guard."""
+    token = f"{os.getpid()}:{os.urandom(16).hex()}"
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         try:
-            os.write(fd, str(os.getpid()).encode("ascii"))
+            os.write(fd, token.encode("ascii"))
         finally:
             os.close(fd)
-        return True
     except FileExistsError:
-        # Перехватываем только доказанно устаревший lock: PID умер либо это старый lock без PID.
+        return False
+    _claim_tokens()[str(lock.absolute())] = token
+    return True
+
+
+def claim(path: Path) -> bool:
+    """Атомарно занять WAV; конкурентный stale-reclaim сериализован между процессами."""
+    lock = path.with_suffix(".lock")
+    with _claim_guard(path):
+        if path.exists():
+            return False
         try:
             st = lock.stat()
-            if path.exists() or time.time() - st.st_mtime <= LOCK_STALE_SEC:
-                return False
-            raw = lock.read_text(encoding="ascii").strip()
-            if raw:
-                try:
-                    alive = _pid_alive(int(raw))
-                except (ValueError, OverflowError):
-                    return False                 # неизвестный владелец — не перехватываем
-                if alive is not False:
-                    return False                 # живой или неизвестный PID — lock не трогаем
-            stale = lock.with_name(lock.name + f".stale.{os.getpid()}.{time.time_ns()}")
-            os.rename(lock, stale)                # атомарно: только один конкурент заберёт старый lock
-            try:
-                stale.unlink(missing_ok=True)
-            finally:
-                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                try:
-                    os.write(fd, str(os.getpid()).encode("ascii"))
-                finally:
-                    os.close(fd)
-            return True
-        except FileExistsError:
-            return False
+        except FileNotFoundError:
+            return _write_claim(lock, path)
         except OSError:
             return False
 
+        if time.time() - st.st_mtime <= LOCK_STALE_SEC:
+            return False
+        try:
+            raw = lock.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            return False
+        if raw:
+            # Старый формат PID-only и новый PID:token читаются одинаково.
+            try:
+                owner_pid = int(raw.partition(":")[0])
+            except (ValueError, OverflowError):
+                return False                 # неизвестный владелец — не перехватываем
+            if _pid_alive(owner_pid) is not False:
+                return False                 # живой или неизвестный PID — lock не трогаем
+        try:
+            # _claim_guard закрывает TOCTOU между проверкой старого владельца,
+            # удалением stale-lock и созданием нового lock другим воркером.
+            lock.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        return _write_claim(lock, path)
+
 
 def release(path: Path):
-    """Удаляет только собственный lock; чужой lock не трогает."""
+    """Удаляет только lock, токен которого принадлежит текущему потоку."""
     lock = path.with_suffix(".lock")
-    try:
-        owner = lock.read_text(encoding="ascii").strip()
-        if owner == str(os.getpid()):
-            lock.unlink()
-    except (OSError, UnicodeError):
-        pass
+    key = str(lock.absolute())
+    tokens = _claim_tokens()
+    token = tokens.get(key)
+    if not token:
+        return
+    with _claim_guard(path):
+        try:
+            owner = lock.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            tokens.pop(key, None)
+            return
+        if owner == token:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+        # Даже при несовпадении забываем старое владение: чужой новый lock не наш.
+        tokens.pop(key, None)
+
 
 
 def load_qwen(model_id: str, attn: str):
