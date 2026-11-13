@@ -1,0 +1,30 @@
+name: Nox regression tests
+
+on:
+  push:
+    branches:
+      - audit/nox-regression-fixes-2026-11-12
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  regression:
+    name: Regression (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Compile all Python modules
+        run: python -m compileall -q base kit tests
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v

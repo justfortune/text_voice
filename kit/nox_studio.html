@@ -782,7 +782,8 @@ function drawInsp(){
   for(const t of s.takes) h += takeRow(s, t.tid, takeName(t), (t.src === "import" && t.name ? t.name + ", " : "") + (t.dur ? Number(t.dur).toFixed(1) + " с" : "") + (t.at ? ", " + t.at.slice(11, 16) : "")
                                         + (t.trim ? ", обрезано до " + (t.trim[1] - t.trim[0]).toFixed(1) + " с" : ""), t.chosen, t.why, lk);
   h += '</div>';
-  if(!lk) h += '<div class="tools"><button id="ownRec" title="Ваша запись с компьютера (mp3, wav и другие) станет новым дублем этой фразы. Прежние дубли остаются; запись можно обрезать (U)">Своя запись с компьютера…</button>'
+  if(!lk) h += '<div class="tools"><button id="ownMic" title="Записать выбранную фразу своим голосом через микрофон ПК">Записать с микрофона…</button>'
+             + '<button id="ownRec" title="Ваша запись с компьютера (mp3, wav и другие) станет новым дублем этой фразы. Прежние дубли остаются; запись можно обрезать (U)">Своя запись с компьютера…</button>'
             + (S.part.locked ? "" : '<button id="insAfter" title="Новая фраза сразу после этой: её озвучит движок или вы сами (Insert)">Вставить фразу после этой…</button>')
             + (!S.part.locked && !s.ins && !(s.joined && s.joined.length) && (s.edits || []).length ? '<button id="segReset" title="Только эта фраза снова станет такой, какой её озвучил конвейер: роль и текст как в книге, обычные скорость и паузы, черновая запись. Дубли остаются в списке. Отмена — Ctrl+Z">Сбросить правки фразы</button>' : "") + '</div>';
   if(ownChosen(s)) h += '<div class="note">Звучит ваша запись. Правила чтения, словарь и смена роли её не меняют. «Озвучить заново» сделает дубль движка — запись останется в списке.</div>';
@@ -884,6 +885,7 @@ function bindInsp(s){
   on("#synthAll", "click", synthAll);
   for(const b of document.querySelectorAll('.take [data-trim]')) b.addEventListener("click", () => trimDialog(s.uid, b.dataset.trim));
   on("#ownRec", "click", () => ownRecord(s.uid));
+   on("#ownMic", "click", () => recordOwn(s.uid));
   on("#insAfter", "click", () => insertDialog(s.uid));
   on("#insEdit", "click", () => insertEditDialog(s.uid));
   on("#insDel", "click", () => insertDelete(s.uid));
@@ -1099,9 +1101,105 @@ async function ownRecord(uid, file){
     if(!r.ok || j.error) throw new Error(j.error || ("ошибка " + r.status));
     S.ed = null; if(j.part) setPart(j.part);
     const tk = j.take;
-    toast("Ваша запись стала новым дублем фразы № " + s.id + " (" + Number(tk.dur).toFixed(1) + " с)" + (tk.trim ? ". Тишина по краям обрезана" : "") + ". Прежние дубли на месте, исходный файл сохранён в studio\\imports.", "ok", 14000, ["Обрезать…", () => trimDialog(uid, tk.tid)]);
-  } catch(e){ fail(e); }
+    toast("Ваша запись стала новым дублем фразы № " + s.id + " (" + Number(tk.dur).toFixed(1) + " с)" + (tk.trim ? ". Тишина по краям обрезана" : "") + ". Прежние дубли на месте, исходный файл сохранён в studio\\imports.", "ok", 14000, ["Обрезать…", () => trimDialog(uid, tk.tid)]); return true;
+  } catch(e){ fail(e); return false; }
   finally { S.posts--; t.remove(); }
+}
+// ---------------------------------------------------------------- запись собственного голоса непосредственно с микрофона
+let MIC = null, MIC_REVIEW_URL = "", MIC_PENDING = false;
+async function recordOwn(uid){
+  const s = segOf(uid); if(!s) return;
+  if(s.locked){ toast("Фраза закреплена — сначала снимите закрепление.", "red"); return; }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined"){
+    toast("Запись микрофона недоступна. Откройте студию в актуальном Chrome или Edge.", "red", 9000); return;
+  }
+  if(MIC || MIC_PENDING){ toast("Запись уже открыта или запрашивается — завершите её или дождитесь разрешения.", "red"); return; }
+  let stream;
+  MIC_PENDING = true;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  } catch(e){
+    MIC_PENDING = false;
+    const msg = e && (e.name==="NotAllowedError" || e.name==="SecurityError")
+      ? "Нет разрешения на микрофон. Разрешите доступ локальной студии в настройках браузера."
+      : e && e.name==="NotFoundError" ? "Микрофон не найден. Проверьте устройство ввода Windows."
+      : "Не удалось открыть микрофон: "+(e && e.message || e);
+    toast(msg,"red",10000); return;
+  }
+  MIC_PENDING = false;
+  const mime=["audio/webm;codecs=opus","audio/webm"].find(x=>MediaRecorder.isTypeSupported(x)) || "";
+  let rec;
+  try { rec=new MediaRecorder(stream,mime?{mimeType:mime,audioBitsPerSecond:128000}:{audioBitsPerSecond:128000}); }
+  catch(e){stream.getTracks().forEach(t=>t.stop());toast("Браузер не смог создать запись: "+e.message,"red");return;}
+  const chunks=[]; let keep=false; const started=Date.now();
+  let audioCtx=null, analyser=null, meterTimer=0;
+  try {
+    const Ctx=window.AudioContext||window.webkitAudioContext;
+    if(Ctx){audioCtx=new Ctx(); analyser=audioCtx.createAnalyser(); analyser.fftSize=512; audioCtx.createMediaStreamSource(stream).connect(analyser);}
+  } catch(e){ audioCtx=null; analyser=null; }
+  MIC={uid,rec,stream,clock:0,audioCtx,meterTimer};
+  rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+  rec.onerror=e=>{const msg=e.error&&e.error.message||"ошибка записи";micRelease();closeDialog();toast("Ошибка микрофона: "+msg,"red",9000);};
+  dialog('<h3>Запись фразы № '+esc(s.id)+'</h3><p style="font:18px/1.55 var(--serif)">'+esc(s.tech)+'</p>'
+    +'<p class="note">Проверьте уровень сигнала. Говорите естественно, не вплотную к микрофону. Исходная запись останется отдельным файлом; выбранный дубль не будет заменён до вашего подтверждения.</p>'
+    +'<p id="micClock" class="num" style="font-size:24px">00:00</p><div style="height:9px;background:var(--tape);border-radius:5px;overflow:hidden"><div id="micMeter" style="height:100%;width:0;background:var(--stamp);transition:width .08s"></div></div><p id="micLevel" class="note">Идёт запись…</p>',
+    [["Отменить",()=>{keep=false;micCancel();}],["Остановить и прослушать",()=>{keep=true;if(rec.state!=="inactive")rec.stop();},"pri"]]);
+  rec.onstop=()=>{
+    const elapsed=(Date.now()-started)/1000, blob=new Blob(chunks,{type:rec.mimeType||"audio/webm"});
+    micRelease();
+    if(!keep)return;
+    if(blob.size<1500||elapsed<0.25){toast("Запись слишком короткая или пустая. Повторите.", "red");return;}
+    const ext=(rec.mimeType||"").includes("mp4")?"m4a":"webm";
+    const file=new File([blob],"microphone_"+new Date().toISOString().replace(/[:.]/g,"-")+"."+ext,{type:blob.type,lastModified:Date.now()});
+    MIC_REVIEW_URL=URL.createObjectURL(blob);
+    dialog('<h3>Прослушайте запись — фраза № '+esc(s.id)+'</h3><p style="font:18px/1.55 var(--serif)">'+esc(s.tech)+'</p>'
+      +'<audio controls autoplay style="width:100%" src="'+MIC_REVIEW_URL+'"></audio>'
+      +'<p class="note">Если всё хорошо, сохраните дубль. Если ошиблись — перезапишите. Старые дубли сохраняются.</p>',
+      [["Отбросить",()=>{micReviewClear();toast("Запись отброшена.", "", 4000);}],
+       ["Перезаписать",()=>{micReviewClear();recordOwn(uid);}],
+       ["Сохранить дубль",async()=>{micReviewClear();await ownRecord(uid,file);},"pri"]]);
+  };
+  try { rec.start(500); }
+  catch(e){
+    micRelease(); closeDialog();
+    toast("Не удалось начать запись: "+(e&&e.message||e),"red",9000);
+    return;
+  }
+  if(analyser){
+    const data=new Uint8Array(analyser.fftSize);
+    MIC.meterTimer=setInterval(()=>{
+      if(!MIC||MIC.rec!==rec)return;
+      analyser.getByteTimeDomainData(data);
+      let sum=0;for(let i=0;i<data.length;i++){const v=(data[i]-128)/128;sum+=v*v;}
+      const rms=Math.sqrt(sum/data.length),pct=Math.max(0,Math.min(100,Math.round(rms*260)));
+      const bar=$("#micMeter"),label=$("#micLevel");
+      if(bar)bar.style.width=pct+"%";
+      if(label)label.textContent=pct<2?"Сигнал почти не поступает — проверьте микрофон и его уровень":pct<12?"Сигнал тихий — говорите чуть ближе или увеличьте уровень входа":pct>88?"Сигнал очень высокий — возможны искажения, отодвиньтесь от микрофона":"Уровень сигнала нормальный";
+    },80);
+  }
+  MIC.clock=setInterval(()=>{
+    if(!MIC||MIC.rec!==rec)return;
+    const sec=Math.floor((Date.now()-started)/1000),el=$("#micClock");
+    if(el)el.textContent=String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0");
+    if(sec>=180&&rec.state!=="inactive"){keep=true;rec.stop();closeDialog();toast("Достигнут предел записи 3 минуты — запись готова к прослушиванию.", "blue",6000);}
+  },250);
+}
+function micReviewClear(){
+  if(MIC_REVIEW_URL){try{URL.revokeObjectURL(MIC_REVIEW_URL);}catch(e){}MIC_REVIEW_URL="";}
+}
+function micRelease(){
+  if(!MIC)return;
+  clearInterval(MIC.clock);clearInterval(MIC.meterTimer);
+  MIC.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});
+  if(MIC.audioCtx){try{MIC.audioCtx.close();}catch(e){}}
+  MIC=null;
+}
+function micCancel(){
+  if(!MIC)return;
+  const m=MIC;MIC=null;clearInterval(m.clock);clearInterval(m.meterTimer);
+  m.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});
+  if(m.audioCtx){try{m.audioCtx.close();}catch(e){}}
+  if(m.rec.state!=="inactive"){m.rec.onstop=null;try{m.rec.stop();}catch(e){}}
 }
 const TR = {uid:null, tid:"", dur:0, t0:0, t1:0, v0:0, v1:0, peaks:[], auto:null, next:null, moved:false, drag:null, timer:0, play:null};
 async function trimDialog(uid, tid){
@@ -1538,7 +1636,7 @@ window.addEventListener("resize", draw);
 // ================================================================ ЗВУКИ, ФОН И МУЗЫКА: дорожки на ленте
 const CUE_KINDS = ["sfx", "amb", "mus"], CUE_NAME = {sfx:"Звук", amb:"Фон", mus:"Музыка"}, LANE_NAME = {sfx:"звуки", amb:"фон", mus:"музыка"};
 const CUE_VAR = {sfx:"--sfx", amb:"--amb", mus:"--mus"};
-const SND_RE = /\.(wav|mp3|ogg|oga|flac|m4a|aac|opus|wma|aif|aiff)$/i;
+const SND_RE = /\.(wav|webm|mp3|ogg|oga|flac|m4a|aac|opus|wma|aif|aiff)$/i;
 function cueOf(id){ return S.part && S.part.cues ? S.part.cues.find(c => c.id === id) : null; }
 // Высота дорожки: обычно 22; когда на ней 3–4 звука сразу (несколько петель фона) — по 11 на строку, чтобы подписи читались
 function laneH(kd){ const r = ((S.part && S.part.laneRows) || {})[kd] || 1; return r > 2 ? 11 * r : 22; }
@@ -2200,8 +2298,10 @@ function dialog(html, buttons){
   $("#veil").hidden = false;
   const last = f.lastElementChild; if(last) last.focus();
 }
-function closeDialog(){ $("#veil").hidden = true; $("#dlg").classList.remove("wide"); aux.pause(); if(PICK && PICK.sel === "#insRoleRow") PICK.close(); }
+function closeDialog(){ $("#veil").hidden = true; $("#dlg").classList.remove("wide"); aux.pause(); if(MIC_REVIEW_URL) micReviewClear(); if(PICK && PICK.sel === "#insRoleRow") PICK.close(); }
 $("#veil").addEventListener("mousedown", e => { if(e.target.id === "veil") closeDialog(); });
+$("#veil").addEventListener("mousedown", e => { if(e.target.id === "veil" && MIC) { micCancel(); toast("Запись микрофона отменена.", "", 4000); } });
+window.addEventListener("keydown", e => { if(e.key === "Escape" && MIC) { micCancel(); toast("Запись микрофона отменена.", "", 4000); } }, true);
 function partStatus(p){
   if(!p.opened) return "черновик конвейера";
   if(p.locked) return (!p.export ? "закреплена, файла нет" : p.export.fresh ? "закреплена, файл собран" : "закреплена, файл устарел") + (p.auto ? " — принята без прослушивания" : "");
@@ -2275,12 +2375,14 @@ async function bookDialog(){
   if(a.state === "run") h += '<p class="bk run"><b>Идёт.</b> ' + esc(a.step) + '</p>';
   else if(a.state === "pause") h += '<p class="bk"><b>Пауза.</b> ' + esc(a.step) + '</p>';
   else if(a.state === "error") h += '<p class="bk err"><b>Остановлено на части ' + (a.part || "?") + '.</b> ' + esc(a.err) + '</p>';
-  else if(a.done) h += '<p class="bk ok"><b>Книга озвучена и закреплена целиком.</b> Осталось только собрать главы, если каких-то файлов нет.</p>';
+  else if(a.done) h += '<p class="bk ok"><b>Книга озвучена и закреплена целиком; все файлы глав собраны и актуальны.</b></p>';
   h += '<p class="note">Закреплено частей: ' + (a.locked || 0) + ' — ' + (a.pct || 0) + ' % книги' + (a.auto_parts ? ' (принято без прослушивания: ' + a.auto_parts + ')' : '')
     + '. Глав собрано: ' + (a.chapters || 0) + ' из ' + (a.chapters_total || 0) + '.' + (a.secs ? ' В работе: ' + secsRu(a.secs) + '.' : '') + (a.eta ? ' Осталось примерно ' + secsRu(a.eta) + '.' : '') + '</p>';
   if(a.state !== "run" && !a.done){
     h += '<p><b>С чего начнётся:</b> ' + (cur ? 'открытая часть ' + cur.n + ' будет принята как есть — изменённые фразы сначала переозвучатся, потом часть закрепится и соберётся её файл'
-        : draft ? 'часть ' + draft.n + ' уже собрана конвейером — она будет принята и закреплена' : 'конвейер возьмётся за часть ' + (g.next || 1)) + '.</p>'
+        : draft ? 'часть ' + draft.n + ' уже собрана конвейером — она будет принята и закреплена'
+        : a.parts_done ? 'все части уже озвучены и закреплены — студия проверит и соберёт недостающие или устаревшие файлы глав без повторной озвучки'
+        : 'конвейер возьмётся за часть ' + (g.next || 1)) + '.</p>'
       + '<label class="ck"><input type="checkbox" id="bkSnd"' + (a.sound !== false && a.kit ? " checked" : "") + (a.kit ? "" : " disabled") + '><span>Ставить звуки, фон и музыку из партитуры книги — тогда рядом с каждой частью и главой лягут версии со звуком'
       + (a.kit ? '. Громкости дорожек: музыка ' + Math.round(((S.part && S.part.mix) || {mus:0.1}).mus * 100) + ' %, звуки ' + Math.round(((S.part && S.part.mix) || {sfx:0.16}).sfx * 100) + ' %, фон ' + Math.round(((S.part && S.part.mix) || {amb:0.12}).amb * 100) + ' % от голоса (ползунки — в «Звуки и музыка»)' : ' (звукового комплекта у этой книги нет — файлы будут только с голосом)') + '</span></label>';
   }

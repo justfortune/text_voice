@@ -26,12 +26,15 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+import threading
+from contextlib import contextmanager
 from collections import Counter, OrderedDict
 from pathlib import Path
 
@@ -50,6 +53,7 @@ CHAPTERS = WORK / "chapters"
 PARTS = HERE / "parts"
 PARTS_INDEX = WORK / "parts.json"
 DUR_CACHE = WORK / "durations.json"
+_CLAIMS = threading.local()  # lock token is owned by the thread that claimed the WAV
 LOCK_STALE_SEC = 45 * 60   # «замок» старше этого без готового wav считается брошенным (упавший воркер)
 
 NARRATOR = "narrator"
@@ -163,33 +167,52 @@ def split_sentences(text: str):
 
 
 def chunk_text(text: str, max_chars: int = MAX_CHARS):
-    """Режем длинный текст по предложениям в куски <= max_chars; очень длинные предложения — по запятым."""
+    """Делит текст на непустые куски не длиннее max_chars, не теряя пунктуацию."""
+    text = str(text or "").strip()
+    if not text:
+        return []
+    max_chars = max(1, int(max_chars))
     chunks, cur = [], ""
-    for s in split_sentences(text):
-        if len(s) > max_chars * 1.5:
-            # режем по запятым/точкам с запятой
-            piece = ""
-            for frag in re.split(r"(?<=[,;:])\s+", s):
-                if piece and len(piece) + len(frag) + 1 > max_chars:
-                    chunks.append(piece)
-                    piece = frag
-                else:
-                    piece = (piece + " " + frag).strip()
-            if piece:
-                if cur and len(cur) + len(piece) + 1 <= max_chars:
-                    cur = cur + " " + piece
-                else:
+
+    def append_piece(piece):
+        nonlocal cur
+        piece = piece.strip()
+        if not piece:
+            return
+        if len(piece) > max_chars:
+            # Резервное деление по словам; сверхдлинное «слово» режется только в крайнем случае.
+            for word in re.findall(r"\S+", piece):
+                while len(word) > max_chars:
                     if cur:
                         chunks.append(cur)
-                    cur = piece
-            continue
-        if cur and len(cur) + len(s) + 1 > max_chars:
+                        cur = ""
+                    chunks.append(word[:max_chars])
+                    word = word[max_chars:]
+                if word:
+                    if cur and len(cur) + 1 + len(word) > max_chars:
+                        chunks.append(cur)
+                        cur = word
+                    else:
+                        cur = (cur + " " + word).strip()
+            return
+        if cur and len(cur) + 1 + len(piece) > max_chars:
             chunks.append(cur)
-            cur = s
+            cur = piece
         else:
-            cur = (cur + " " + s).strip()
+            cur = (cur + " " + piece).strip()
+
+    for sentence in split_sentences(text):
+        sentence = sentence.strip()
+        if len(sentence) <= max_chars:
+            append_piece(sentence)
+            continue
+        # Сначала сохраняем естественные границы по запятым, точкам с запятой и двоеточиям.
+        for fragment in re.split(r"(?<=[,;:])\s+", sentence):
+            append_piece(fragment)
     if cur:
         chunks.append(cur)
+    if any(not c or len(c) > max_chars for c in chunks):
+        raise ValueError("chunk_text: нарушена граница длины сегмента")
     return chunks
 
 
@@ -354,7 +377,378 @@ def collect_names(paras) -> set[str]:
     return names
 
 
+def _atomic_write_text(path: Path, text: str):
+    """Publish UTF-8 state through a unique temp file; never truncate the previous edition."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _snapshot_current_edition():
+    """Archive the current book definition, time maps and exact part outputs before resegmentation.
+
+    Part audio is hard-linked into the immutable edition snapshot on the same volume (copy fallback).
+    This preserves old audio across the pipeline's atomic os.replace publication without normally
+    doubling multi-gigabyte audiobook files.
+    """
+    if not CSV_PATH.is_file() or not ROLES_PATH.is_file():
+        return None
+    editions = WORK / "editions"
+    sources = [("segments.csv", CSV_PATH), ("roles.json", ROLES_PATH)]
+    if PARTS_INDEX.is_file():
+        sources.append(("parts.json", PARTS_INDEX))
+    for time_map in sorted(PARTS.glob("part_*.times.tsv")):
+        sources.append((f"parts/{time_map.name}", time_map))
+
+    records = []
+    for rel, source in sources:
+        records.append({"path": rel, "size": source.stat().st_size, "sha256": _file_sha256(source)})
+    outputs = []
+    for output in sorted(PARTS.glob("part_*")):
+        if output.is_file() and output.suffix.lower() in (".m4b", ".m4a", ".mp3"):
+            outputs.append({"path": f"parts/{output.name}", "size": output.stat().st_size,
+                            "sha256": _file_sha256(output)})
+    identity_data = {"files": records, "outputs_kept_in_place": outputs}
+    identity = hashlib.sha256(json.dumps(identity_data, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    target = editions / f"edition_{identity[:20]}"
+
+    def verify(snapshot: Path):
+        try:
+            manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+            if (manifest.get("edition_id") != identity or manifest.get("files") != records
+                    or manifest.get("outputs_kept_in_place") != outputs):
+                return False
+            for record in records + outputs:
+                file_path = snapshot / Path(record["path"])
+                if not file_path.is_file() or file_path.stat().st_size != record["size"] \
+                        or _file_sha256(file_path) != record["sha256"]:
+                    return False
+            return True
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+
+    if target.exists():
+        if verify(target):
+            return target
+        raise RuntimeError(f"архив прежней редакции повреждён: {target}; исходные файлы не заменены")
+
+    editions.mkdir(parents=True, exist_ok=True)
+    tmp_dir = editions / f".edition_{identity[:20]}.{os.getpid()}.{time.time_ns()}.tmp"
+    audio_methods = []
+    try:
+        tmp_dir.mkdir()
+        for record, (_, source) in zip(records, sources):
+            destination = tmp_dir / Path(record["path"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        for record in outputs:
+            source = PARTS / Path(record["path"]).name
+            destination = tmp_dir / Path(record["path"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, destination)
+                method = "hardlink"
+            except OSError:
+                shutil.copy2(source, destination)
+                method = "copy"
+            if destination.stat().st_size != record["size"] or _file_sha256(destination) != record["sha256"]:
+                raise RuntimeError(f"контрольная сумма сохранённой части не совпала: {source.name}")
+            audio_methods.append({"path": record["path"], "method": method})
+        manifest = {
+            "schema": 1,
+            "edition_id": identity,
+            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "files": records,
+            "outputs_kept_in_place": outputs,
+            "audio_preservation": audio_methods,
+            "audio_copied": any(x["method"] == "copy" for x in audio_methods),
+        }
+        _atomic_write_text(tmp_dir / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        tmp_dir.rename(target)
+        return target
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def _edition_active_path(rel: str) -> Path:
+    if rel == "segments.csv":
+        return CSV_PATH
+    if rel == "roles.json":
+        return ROLES_PATH
+    if rel == "parts.json":
+        return PARTS_INDEX
+    if re.fullmatch(r"parts/part_\d+\.times\.tsv", rel):
+        return PARTS / Path(rel).name
+    if re.fullmatch(r"parts/part_\d+\.(?:m4b|m4a|mp3)", rel):
+        return PARTS / Path(rel).name
+    raise ValueError(f"недопустимый путь в архиве редакции: {rel!r}")
+
+
+def _validate_edition_snapshot(snapshot: Path) -> dict:
+    try:
+        manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"не читается манифест редакции {snapshot.name}: {e}") from e
+    if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+        raise ValueError(f"неподдерживаемая структура архива редакции: {snapshot.name}")
+    edition_id = str(manifest.get("edition_id") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", edition_id) or snapshot.name != f"edition_{edition_id[:20]}":
+        raise ValueError(f"неверный идентификатор архива редакции: {snapshot.name}")
+    records = manifest.get("files")
+    outputs = manifest.get("outputs_kept_in_place")
+    if not isinstance(records, list) or not isinstance(outputs, list):
+        raise ValueError(f"в манифесте редакции отсутствуют списки файлов: {snapshot.name}")
+    seen = set()
+    for record in records + outputs:
+        if not isinstance(record, dict):
+            raise ValueError(f"неверная запись файла в архиве: {snapshot.name}")
+        rel = record.get("path")
+        if not isinstance(rel, str) or rel in seen:
+            raise ValueError(f"повторный или неверный путь в архиве редакции: {rel!r}")
+        seen.add(rel)
+        active = _edition_active_path(rel)
+        archived = snapshot / Path(rel)
+        if not archived.is_file():
+            raise ValueError(f"в архиве редакции отсутствует файл: {rel}")
+        try:
+            size = int(record["size"])
+            digest = str(record["sha256"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"неверная контрольная запись файла: {rel}") from e
+        if size < 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError(f"неверная контрольная сумма файла: {rel}")
+        if archived.stat().st_size != size or _file_sha256(archived) != digest:
+            raise ValueError(f"контрольная сумма файла в архиве редакции не совпала: {rel}")
+    required = {"segments.csv", "roles.json"}
+    if not required.issubset({record.get("path") for record in records if isinstance(record, dict)}):
+        raise ValueError(f"архив редакции не содержит CSV и roles.json: {snapshot.name}")
+    return manifest
+
+
+def list_editions() -> list:
+    """Return verified immutable book-edition snapshots, newest capture first."""
+    root = WORK / "editions"
+    result = []
+    if not root.is_dir():
+        return result
+    for snapshot in sorted(root.glob("edition_*"), reverse=True):
+        if not snapshot.is_dir():
+            continue
+        try:
+            manifest = _validate_edition_snapshot(snapshot)
+            result.append({
+                "id": str(manifest["edition_id"])[:20],
+                "edition_id": str(manifest["edition_id"]),
+                "captured_at": str(manifest.get("captured_at") or ""),
+                "files": len(manifest["files"]),
+                "parts": len(manifest["outputs_kept_in_place"]),
+                "path": str(snapshot),
+            })
+        except (OSError, ValueError) as e:
+            result.append({"id": snapshot.name.removeprefix("edition_"), "valid": False, "error": str(e)})
+    result.sort(key=lambda item: item.get("captured_at", ""), reverse=True)
+    return result
+
+
+def _apply_edition_snapshot(snapshot: Path, manifest: dict):
+    """Apply one verified snapshot with a rollback set for in-process failures."""
+    desired = {record["path"]: snapshot / Path(record["path"])
+               for record in manifest["files"] + manifest["outputs_kept_in_place"]}
+    current = {}
+    for rel in ("segments.csv", "roles.json", "parts.json"):
+        active = _edition_active_path(rel)
+        if active.is_file():
+            current[rel] = active
+    if PARTS.is_dir():
+        for active in PARTS.glob("part_*"):
+            if not active.is_file():
+                continue
+            rel = f"parts/{active.name}"
+            try:
+                _edition_active_path(rel)
+            except ValueError:
+                continue
+            current[rel] = active
+
+    stage = WORK / f".restore-edition-{os.getpid()}-{time.time_ns()}"
+    staged, rollback = stage / "new", stage / "old"
+    try:
+        for folder in (staged, rollback):
+            folder.mkdir(parents=True, exist_ok=True)
+        for rel, source in desired.items():
+            dest = staged / Path(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, dest)
+        for rel, source in current.items():
+            dest = rollback / Path(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, dest)
+            except OSError:
+                shutil.copy2(source, dest)
+
+        try:
+            for rel in sorted(set(current) | set(desired)):
+                active = _edition_active_path(rel)
+                if rel in desired:
+                    active.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(staged / Path(rel), active)
+                elif active.exists():
+                    active.unlink()
+        except Exception:
+            # Restore the exact previous active set before propagating the failure.
+            for rel in sorted(set(current) | set(desired), reverse=True):
+                active = _edition_active_path(rel)
+                saved = rollback / Path(rel)
+                if saved.is_file():
+                    active.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(saved, active)
+                elif rel not in current and active.exists():
+                    active.unlink()
+            raise
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def restore_edition(edition_id: str) -> dict:
+    """Restore a previously snapshotted book definition, part maps and part audio safely."""
+    edition_id = str(edition_id or "").removeprefix("edition_")
+    if not re.fullmatch(r"[0-9a-f]{20}", edition_id):
+        raise ValueError("укажите первые 20 шестнадцатеричных символов ID редакции")
+    with _claim_guard(CSV_PATH):
+        root = WORK / "editions"
+        matches = list(root.glob(f"edition_{edition_id}")) if root.is_dir() else []
+        if len(matches) != 1 or not matches[0].is_dir():
+            raise ValueError(f"архив редакции {edition_id} не найден")
+        snapshot = matches[0]
+        manifest = _validate_edition_snapshot(snapshot)
+        previous = _snapshot_current_edition()
+        if previous == snapshot:
+            return {"restored": False, "already_current": True, "edition_id": manifest["edition_id"]}
+        _apply_edition_snapshot(snapshot, manifest)
+        return {
+            "restored": True,
+            "edition_id": manifest["edition_id"],
+            "previous_snapshot": str(previous) if previous else None,
+        }
+
+
+def _retire_snapshotted_parts(snapshot: Path):
+    """Clear active part outputs only after verifying every one is present in the immutable snapshot."""
+    manifest = _validate_edition_snapshot(snapshot)
+    remove = []
+    for record in manifest["files"]:
+        rel = record["path"]
+        if not rel.startswith("parts/"):
+            continue
+        active = _edition_active_path(rel)
+        if active.exists():
+            if active.stat().st_size != record["size"] or _file_sha256(active) != record["sha256"]:
+                raise RuntimeError(f"файл части изменился после архивации, не удаляю его: {active.name}")
+            remove.append(active)
+    for record in manifest["outputs_kept_in_place"]:
+        active = _edition_active_path(record["path"])
+        if active.exists():
+            if active.stat().st_size != record["size"] or _file_sha256(active) != record["sha256"]:
+                raise RuntimeError(f"готовое аудио изменилось после архивации, не удаляю его: {active.name}")
+            remove.append(active)
+    index_record = next((record for record in manifest["files"] if record["path"] == "parts.json"), None)
+    if index_record and PARTS_INDEX.is_file() and _file_sha256(PARTS_INDEX) != index_record["sha256"]:
+        raise RuntimeError("work/parts.json изменился после архивации; активный индекс не сброшен")
+    for active in remove:
+        active.unlink()
+    if index_record:
+        _write_parts_index_atomic([])
+
+
+
+
+def _atomic_write_segments(rows):
+    """Write a complete segments.csv before atomically replacing the previous one."""
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CSV_PATH.with_name(f"{CSV_PATH.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
+            writer.writeheader()
+            writer.writerows(rows)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, CSV_PATH)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _atomic_write_edition(rows, roles):
+    """Stage both edition inputs first; roll back CSV if publishing roles.json fails.
+
+    A hard process crash between the two replacements is recoverable from the immutable
+    edition snapshot created immediately before this call.
+    """
+    WORK.mkdir(parents=True, exist_ok=True)
+    stage = WORK / f".segment-publish-{os.getpid()}-{time.time_ns()}"
+    stage.mkdir()
+    staged_csv = stage / "segments.csv"
+    staged_roles = stage / "roles.json"
+    old_csv = stage / "segments.previous.csv"
+    had_csv = CSV_PATH.is_file()
+    try:
+        with open(staged_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
+            writer.writeheader()
+            writer.writerows(rows)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        _atomic_write_text(staged_roles, json.dumps(roles, ensure_ascii=False, indent=2) + "\n")
+        if had_csv:
+            shutil.copy2(CSV_PATH, old_csv)
+        os.replace(staged_csv, CSV_PATH)
+        try:
+            os.replace(staged_roles, ROLES_PATH)
+        except Exception:
+            if had_csv and old_csv.is_file():
+                os.replace(old_csv, CSV_PATH)
+            else:
+                try:
+                    CSV_PATH.unlink()
+                except OSError:
+                    pass
+            raise
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
 def segment(docx_paths, max_chars: int):
+    # Uses the same process-shared guard as parts.json/build_parts: a book cannot be
+    # resegmented while another process is freezing or publishing its part timeline.
+    with _claim_guard(CSV_PATH):
+        return _segment_locked(docx_paths, max_chars)
+
+
+def _segment_locked(docx_paths, max_chars: int):
     WORK.mkdir(exist_ok=True)
     if CSV_PATH.exists() and ROLES_PATH.exists():       # старые wav по номерам -> имена по хешу, пока жив старый CSV
         migrate_legacy_wavs(load_rows(), load_roles())
@@ -443,11 +837,6 @@ def segment(docx_paths, max_chars: int):
                 pause = PAUSE["dialog"] if (k == 0 and j == 0) else PAUSE["chunk"]
                 add(kind, who, cf, pause, ch, pi)
 
-    with CSV_PATH.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
-        w.writeheader()
-        w.writerows(rows)
-
     # roles.json — шаблон с описаниями голосов; существующий файл не перетираем, только дописываем новые роли
     roles = json.loads(ROLES_PATH.read_text(encoding="utf-8")) if ROLES_PATH.exists() else {
         "language": "Russian",
@@ -476,7 +865,13 @@ def segment(docx_paths, max_chars: int):
             roles["roles"][who] = {"instruct": instr, "same_as": None, "count": n}
         else:
             roles["roles"][who]["count"] = n
-    ROLES_PATH.write_text(json.dumps(roles, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Archive old inputs before replacing them; publish the new CSV/roles pair transactionally.
+    previous_edition = _snapshot_current_edition()
+    if previous_edition:
+        print(f"Предыдущая редакция сохранена: {previous_edition}")
+    _atomic_write_edition(rows, roles)
+    if previous_edition:
+        _retire_snapshotted_parts(previous_edition)
 
     # статистика
     conf_cnt = Counter(r["conf"] for r in rows if r["kind"] == "speech")
@@ -591,29 +986,169 @@ def write_wav_atomic(path: Path, data, sr):
     os.replace(tmp, path)
 
 
-def claim(path: Path) -> bool:
-    """Атомарно «занять» сегмент (файл-замок рядом с будущим wav). Несколько воркеров могут работать
-    над одной очередью одновременно, не мешая друг другу."""
-    lock = path.with_suffix(".lock")
+def _pid_alive(pid: int):
+    """Проверяет PID без отправки сигналов процессу; None означает, что статус неизвестен."""
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        # На Windows os.kill(pid, 0) НЕ является POSIX-проверкой существования:
+        # ненулевой/неподдерживаемый сигнал может завершить целевой процесс.
+        import ctypes
+        from ctypes import wintypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            # ERROR_INVALID_PARAMETER: такого PID уже нет. Остальные ошибки
+            # (например, ACCESS_DENIED) трактуем консервативно как unknown.
+            return False if error == 87 else None
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return None
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+    except OSError:
+        return None
+
+
+@contextmanager
+def _claim_guard(path: Path):
+    """Короткая межпроцессная секция для проверки/перехвата lock-файла.
+
+    WAV lock остаётся совместимым со старым PID-only форматом. Guard-файл один
+    на каталог WAV и намеренно не удаляется: удаление inode при ожидающих процессах
+    разрушило бы взаимное исключение.
+    """
+    guard = path.parent / ".nox-claims.guard"
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    with open(guard, "a+b") as f:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                f.write(b"\\0")
+                f.flush()
+            f.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.02)
+            try:
+                yield
+            finally:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _claim_tokens() -> dict:
+    tokens = getattr(_CLAIMS, "tokens", None)
+    if tokens is None:
+        tokens = {}
+        _CLAIMS.tokens = tokens
+    return tokens
+
+
+def _write_claim(lock: Path, path: Path) -> bool:
+    """Создать lock с уникальным токеном. Вызывается только под _claim_guard."""
+    token = f"{os.getpid()}:{os.urandom(16).hex()}"
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.close(fd)
-        return True
-    except FileExistsError:
         try:
-            if time.time() - lock.stat().st_mtime > LOCK_STALE_SEC and not path.exists():
-                lock.touch()                 # брошенный замок упавшего воркера — забираем
-                return True
-        except OSError:
-            pass
+            os.write(fd, token.encode("ascii"))
+        finally:
+            os.close(fd)
+    except FileExistsError:
         return False
+    _claim_tokens()[str(lock.absolute())] = token
+    return True
+
+
+def claim(path: Path) -> bool:
+    """Атомарно занять WAV; конкурентный stale-reclaim сериализован между процессами."""
+    lock = path.with_suffix(".lock")
+    with _claim_guard(path):
+        if path.exists():
+            return False
+        try:
+            st = lock.stat()
+        except FileNotFoundError:
+            return _write_claim(lock, path)
+        except OSError:
+            return False
+
+        if time.time() - st.st_mtime <= LOCK_STALE_SEC:
+            return False
+        try:
+            raw = lock.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            return False
+        if raw:
+            # Старый формат PID-only и новый PID:token читаются одинаково.
+            try:
+                owner_pid = int(raw.partition(":")[0])
+            except (ValueError, OverflowError):
+                return False                 # неизвестный владелец — не перехватываем
+            if _pid_alive(owner_pid) is not False:
+                return False                 # живой или неизвестный PID — lock не трогаем
+        try:
+            # _claim_guard закрывает TOCTOU между проверкой старого владельца,
+            # удалением stale-lock и созданием нового lock другим воркером.
+            lock.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        return _write_claim(lock, path)
 
 
 def release(path: Path):
-    try:
-        path.with_suffix(".lock").unlink()
-    except OSError:
-        pass
+    """Удаляет только lock, токен которого принадлежит текущему потоку."""
+    lock = path.with_suffix(".lock")
+    key = str(lock.absolute())
+    tokens = _claim_tokens()
+    token = tokens.get(key)
+    if not token:
+        return
+    with _claim_guard(path):
+        try:
+            owner = lock.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            tokens.pop(key, None)
+            return
+        if owner == token:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+        # Даже при несовпадении забываем старое владение: чужой новый lock не наш.
+        tokens.pop(key, None)
+
 
 
 def load_qwen(model_id: str, attn: str):
@@ -973,12 +1508,16 @@ def load_durations():
 
 
 def duration_of(path: Path, cache: dict) -> float:
+    """Длительность WAV с инвалидацией кэша при перезаписи файла."""
     import soundfile as sf
-    k = path.stem
+    st = path.stat()
+    k = f"{path.name}|{st.st_size}|{st.st_mtime_ns}"
     if k not in cache:
         info = sf.info(str(path))
+        if not info.samplerate:
+            raise ValueError(f"некорректная частота дискретизации WAV: {path}")
         cache[k] = info.frames / info.samplerate
-    return cache[k]
+    return float(cache[k])
 
 
 def assemble(rows, roles, head_pause=True):
@@ -1101,21 +1640,118 @@ def build(args):
 # 5. PARTS / WATCH — части по ~N минут из уже готового начала книги; watch собирает их по мере озвучки и копирует
 # ----------------------------------------------------------------------------------------------------------------------
 
-def plan_parts(rows, roles, minutes: float):
-    """-> (parts, complete). parts: список (start_idx, end_idx_incl, closed). Границы уже собранных частей
-    заморожены в work/parts.json (по хешам сегментов), чтобы номера частей не «ехали» между запусками."""
+def part_source_seconds(minutes: float, speed: float = 1.0) -> float:
+    """Исходная длительность аудио, соответствующая заданной длительности после atempo."""
+    try:
+        minutes, speed = float(minutes), float(speed)
+    except (TypeError, ValueError):
+        raise ValueError("длительность части и скорость должны быть числами")
+    if not math.isfinite(minutes) or minutes <= 0:
+        raise ValueError("длительность части должна быть положительным конечным числом минут")
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError("скорость сборки должна быть положительным конечным числом")
+    return minutes * 60.0 * speed
+
+
+def _read_parts_index() -> list:
+    """Read the saved part index without silently treating damage as an empty/new edition."""
+    try:
+        raw = PARTS_INDEX.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeError) as e:
+        raise ValueError(f"не удаётся прочитать work/parts.json: {e}; старые части не изменены") from e
+    try:
+        saved = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError("work/parts.json повреждён: индекс частей не будет сброшен автоматически; "
+                         "сохраните копию файла и готовых частей перед восстановлением") from e
+    if not isinstance(saved, list):
+        raise ValueError("work/parts.json имеет неизвестную структуру: ожидался список частей; "
+                         "старые файлы сохранены")
+    for i, part in enumerate(saved, 1):
+        if not isinstance(part, dict) or not isinstance(part.get("start"), str) or not part["start"] \
+                or not isinstance(part.get("end"), str) or not part["end"]:
+            raise ValueError(f"work/parts.json: запись части {i} неполная; автоматическая перестройка остановлена")
+        if ("start_id" in part) != ("end_id" in part):
+            raise ValueError(f"work/parts.json: у части {i} задана только одна граница ID; индекс сохранён")
+        if "sig" in part and part["sig"] and not isinstance(part["sig"], str):
+            raise ValueError(f"work/parts.json: неверная подпись содержимого части {i}; индекс сохранён")
+    return saved
+
+
+def _write_parts_index_atomic(parts: list):
+    """Publish the part index only after a complete JSON file has reached disk."""
+    PARTS_INDEX.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PARTS_INDEX.with_name(f"{PARTS_INDEX.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(parts, f, ensure_ascii=False, indent=1)
+            f.write("\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, PARTS_INDEX)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def plan_parts(rows, roles, minutes: float, speed: float = 1.0):
+    """-> (parts, ready, complete). Существующие границы частей остаются замороженными.
+    Новая граница рассчитывается по длительности исходного звука с учётом скорости финального atempo."""
+    target_source_seconds = part_source_seconds(minutes, speed)
     cache = load_durations()
     keys = [wav_for(r, roles).stem for r in rows]
-    key_pos = {k: i for i, k in enumerate(keys)}
+    # WAV cache keys may repeat by design; book positions must instead use unique row IDs.
     frozen = []
-    try:
-        for p in json.loads(PARTS_INDEX.read_text(encoding="utf-8")):
-            a, b = key_pos.get(p["start"]), key_pos.get(p["end"])
-            if a is None or b is None or b < a or (frozen and a != frozen[-1][1] + 1) or (not frozen and a != 0):
-                break
-            frozen.append((a, b))
-    except Exception:
-        frozen = []
+    id_pos = {str(r["id"]): i for i, r in enumerate(rows)}
+    if len(id_pos) != len(rows):
+        raise ValueError("в segments.csv повторяются ID сегментов: невозможно безопасно привязать части")
+    key_positions = {}
+    for i, key in enumerate(keys):
+        key_positions.setdefault(key, []).append(i)
+    saved = _read_parts_index()
+    for part_no, p in enumerate(saved, 1):
+        if "n" in p and str(p["n"]) != str(part_no):
+            raise ValueError(f"work/parts.json: нарушена последовательность номеров частей у записи {part_no}")
+        if "start_id" in p and "end_id" in p:
+            a, b = id_pos.get(str(p["start_id"])), id_pos.get(str(p["end_id"]))
+        else:
+            # Старый индекс по WAV-хешу неоднозначен при повторяющихся репликах.
+            starts = key_positions.get(p.get("start"), [])
+            ends = key_positions.get(p.get("end"), [])
+            if len(starts) != 1 or len(ends) != 1:
+                raise ValueError("work/parts.json содержит старые неоднозначные границы (повторяющиеся реплики). "
+                                 "Автоматическая миграция остановлена, чтобы не перепутать части; сохраните старый индекс "
+                                 "и готовые файлы частей перед ручной перестройкой.")
+            a, b = starts[0], ends[0]
+        if a is None or b is None or b < a or (frozen and a != frozen[-1][1] + 1) or (not frozen and a != 0):
+            raise ValueError("work/parts.json относится к другой редакции книги: сохранённые границы "
+                             "больше не находятся в текущей разбивке. Старые части и индекс сохранены.")
+        if keys[a] != p.get("start") or keys[b] != p.get("end"):
+            raise ValueError("work/parts.json относится к другой редакции книги: границы частей больше не "
+                             "совпадают с аудио текущих реплик. Старые части и индекс сохранены; не запускайте "
+                             "пересборку поверх них, пока не сохраните отдельную копию старой редакции.")
+        saved_sig = p.get("sig")
+        if saved_sig:
+            current_sig = hashlib.sha256("\n".join(keys[a:b + 1]).encode("utf-8")).hexdigest()
+            if saved_sig != current_sig:
+                raise ValueError("содержимое части изменилось после сборки (work/parts.json): "
+                                 "сохраните старую редакцию и её аудио отдельно перед пересборкой.")
+        frozen.append((a, b))
     # сколько сегментов готово подряд с начала книги
     ready = 0
     while ready < len(rows) and wav_for(rows[ready], roles).exists():
@@ -1129,38 +1765,131 @@ def plan_parts(rows, roles, minutes: float):
         acc += int(r["pause_before_ms"]) / 1000 + duration_of(wav_for(r, roles), cache)
         nxt = rows[i + 1] if i + 1 < len(rows) else None
         boundary_ok = nxt is None or nxt["kind"] == "head" or int(nxt["pause_before_ms"]) >= PAUSE["para"]
-        if acc >= minutes * 60 and boundary_ok:
+        if acc >= target_source_seconds and boundary_ok:
             parts.append((start, i, True))
             start, acc = i + 1, 0.0
     if complete and start < len(rows):
         parts.append((start, len(rows) - 1, True))     # хвост книги — последняя часть, пусть и короче
     elif start < ready:
         parts.append((start, ready - 1, False))        # недособранная часть (ещё растёт)
-    DUR_CACHE.write_text(json.dumps(cache), encoding="utf-8")
+    _atomic_write_text(DUR_CACHE, json.dumps(cache, ensure_ascii=False) + "\n")
     return parts, ready, complete
 
 
+def _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed) -> str:
+    """Identity of the encoded part, not just its spoken text.
+
+    Existing M4B reuse also depends on chapter labels/pauses, voice assignments,
+    actual WAV revisions and the encoder configuration.
+    """
+    wavs = []
+    selected_rows = []
+    for row in rows[a:b + 1]:
+        wav = wav_for(row, roles)
+        try:
+            st = wav.stat()
+        except OSError as e:
+            raise ValueError(f"нет готового WAV для части: {wav.name}") from e
+        # mtime/size help diagnosis, but the digest is authoritative for source identity.
+        wavs.append([wav.name, st.st_size, st.st_mtime_ns, _file_sha256(wav)])
+        selected_rows.append({field: row.get(field) for field in FIELDS})
+    payload = {
+        "schema": 1,
+        "rows": selected_rows,
+        "wav": wavs,
+        "roles": roles,
+        "title": title,
+        "author": author,
+        "bitrate": bitrate,
+        "format": fmt,
+        "speed": float(speed),
+        "pauses": PAUSE,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def build_parts(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=False, speed=1.0):
-    """Собирает все закрытые части, которых ещё нет в parts/. -> список новых файлов."""
-    parts, ready, complete = plan_parts(rows, roles, minutes)
+    """Сериализует сборку частей между процессами: общие временные имена и индекс нельзя писать параллельно."""
+    with _claim_guard(PARTS_INDEX):
+        return _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt, quiet, speed)
+
+
+def _build_parts_locked(rows, roles, minutes, title, author, bitrate, fmt="m4b", quiet=False, speed=1.0):
+    """Собирает все закрытые части; существующий файл пропускается только при совпадении индекса и подписи."""
+    saved_index = _read_parts_index()
+    parts, ready, complete = plan_parts(rows, roles, minutes, speed=speed)
     PARTS.mkdir(exist_ok=True)
     new_files = []
-    frozen = []
+    # Keep the entire validated suffix: a crash during rebuilding an early part must not
+    # truncate index records for later, already-existing output files.
+    frozen = [dict(part) for part in saved_index]
+    planned_count = len(parts)
+    if len(saved_index) > planned_count:
+        raise ValueError("work/parts.json содержит больше частей, чем текущий план; старый индекс и файлы сохранены, "
+                         "автоматическое усечение запрещено")
+    for existing in PARTS.glob(f"part_*.{fmt}"):
+        match = re.fullmatch(rf"part_(\d+)\.{re.escape(fmt)}", existing.name)
+        if match and int(match.group(1)) > planned_count:
+            raise ValueError(f"найден старый файл {existing.name}, которого нет в текущем плане частей; "
+                             "он сохранён, автоматическая синхронизация остановлена")
     for n, (a, b, closed) in enumerate(parts, 1):
-        if not closed:
-            break
-        frozen.append({"n": n, "start": wav_for(rows[a], roles).stem, "end": wav_for(rows[b], roles).stem})
         out = PARTS / f"part_{n:02d}.{fmt}"
+        if not closed:
+            if out.exists():
+                raise ValueError(f"{out.name} существует для ещё не завершённой части; файл сохранён")
+            break
+        part_keys = [wav_for(row, roles).stem for row in rows[a:b + 1]]
+        part_sig = hashlib.sha256("\n".join(part_keys).encode("utf-8")).hexdigest()
+        build_sig = _part_build_signature(rows, roles, a, b, title, author, bitrate, fmt, speed)
+        record = {"n": n, "start_id": str(rows[a]["id"]), "end_id": str(rows[b]["id"]),
+                  "start": part_keys[0], "end": part_keys[-1], "sig": part_sig, "build_sig": build_sig}
         if out.exists():
+            if n > len(saved_index) or not saved_index[n - 1].get("sig"):
+                raise ValueError(f"{out.name} уже существует, но work/parts.json не подтверждает содержимое "
+                                 "этой части. Старый файл не перезаписан и не принят за новую редакцию; "
+                                 "сохраните копию старых частей и индекса перед восстановлением.")
+            if saved_index[n - 1].get("sig") != part_sig:
+                raise ValueError(f"{out.name} не соответствует подписи текущей части; старый файл сохранён")
+            old_build_sig = saved_index[n - 1].get("build_sig")
+            if not old_build_sig:
+                raise ValueError(f"{out.name} имеет старый индекс без подписи параметров сборки; нельзя подтвердить "
+                                 "скорость, кодек, главы и параметры голоса. Старый файл сохранён; сделайте копию "
+                                 "старой редакции и её частей перед явной пересборкой.")
+            if old_build_sig != build_sig:
+                raise ValueError(f"{out.name} собран с другими параметрами или данными WAV; старый файл сохранён")
+            old_sha = saved_index[n - 1].get("output_sha256")
+            if not old_sha:
+                raise ValueError(f"{out.name} не имеет контрольной суммы в индексе; автоматический пропуск запрещён, "
+                                 "старый файл сохранён")
+            if _file_sha256(out) != old_sha:
+                raise ValueError(f"{out.name} изменён после сборки (контрольная сумма не совпадает); "
+                                 "старый файл сохранён, автоматический пропуск запрещён")
+            record["output_sha256"] = old_sha
+            record["output_size"] = out.stat().st_size
+            if n <= len(frozen):
+                frozen[n - 1] = record
+            else:
+                frozen.append(record)
             continue
+
         audio, sr, chapters, _ = assemble(rows[a:b + 1], roles, head_pause=False)
         ch_name = rows[a]["ch_title"]
         total = encode_m4b(audio, sr, chapters, out, f"{title} — часть {n:02d} ({ch_name})", author, bitrate,
                            speed=speed)
+        if not out.is_file() or out.stat().st_size <= 0:
+            raise RuntimeError(f"кодировщик не создал готовый файл части: {out.name}")
+        record["output_sha256"] = _file_sha256(out)
+        record["output_size"] = out.stat().st_size
+        if n <= len(frozen):
+            frozen[n - 1] = record
+        else:
+            frozen.append(record)
+        _write_parts_index_atomic(frozen)
         new_files.append(out)
         if not quiet:
             print(f"[parts] {out.name}  {total / 60:5.1f} мин  с «{ch_name}»")
-    PARTS_INDEX.write_text(json.dumps(frozen, ensure_ascii=False, indent=1), encoding="utf-8")
+    _write_parts_index_atomic(frozen)
     if not quiet:
         print(f"готово сегментов подряд с начала: {ready}/{len(rows)}; частей собрано: {len(frozen)}"
               + (" — книга целиком озвучена" if complete else ""))
@@ -1220,6 +1949,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    e = sub.add_parser("editions", help="список сохранённых редакций книги (CSV, роли, карта и готовые части)")
+    r = sub.add_parser("restore-edition", help="восстановить редакцию и её таймлайн; перед запуском закройте студию")
+    r.add_argument("edition_id", help="первые 20 hex-символов ID из команды editions")
+
+
     s = sub.add_parser("segment", help="один или несколько .docx по порядку -> work/segments.csv + work/roles.json")
     s.add_argument("docx", type=Path, nargs="+", help="главы склеиваются в указанном порядке")
     s.add_argument("--max-chars", type=int, default=MAX_CHARS)
@@ -1276,8 +2010,27 @@ def main():
 
     args = ap.parse_args()
     try:
-        if args.cmd == "segment":
+        if args.cmd == "editions":
+            editions = list_editions()
+            for item in editions:
+                if item.get("valid") is False:
+                    print(f"{item['id']}  ПОВРЕЖДЁН: {item['error']}")
+                else:
+                    print(f"{item['id']}  {item['captured_at']}  файлов: {item['files']}, частей: {item['parts']}")
+            if not editions:
+                print("Сохранённых редакций пока нет.")
+        elif args.cmd == "restore-edition":
+            result = restore_edition(args.edition_id)
+            if result.get("already_current"):
+                print(f"Редакция {result['edition_id'][:20]} уже активна.")
+            else:
+                print(f"Восстановлена редакция {result['edition_id'][:20]}.")
+                if result.get("previous_snapshot"):
+                    print(f"Текущая редакция предварительно сохранена: {result['previous_snapshot']}")
+                print("Перезапустите студию, чтобы она перечитала CSV, роли и таймкарты.")
+        elif args.cmd == "segment":
             segment(args.docx, args.max_chars)
+
         elif args.cmd == "cast":
             cast(args)
         elif args.cmd == "synth":

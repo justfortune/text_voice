@@ -786,7 +786,16 @@ def main():
                     cnt["retries"] += 1
                     with retry_log.open("a", encoding="utf-8") as f:
                         f.write(f"{r['id']}\tпопытка {attempt + 1}: {', '.join(why)}\t{r['text'][:80]}\n")
-                (score, x, raw, why, text) = best           # что прочитано в лучшей попытке — то и в .txt для проверки
+                (score, x, raw, why, text) = best
+                critical = [w for w in why if w == "лимит" or w == "обрыв"
+                            or w.startswith(("обрублен конец", "оборвана гласная", "мало речи", "нет речи", "быстро"))]
+                if critical:
+                    with failed_log.open("a", encoding="utf-8") as f:
+                        f.write(f"{r['id']}\\tнеполная/сомнительная запись после {attempts} попыток: "
+                                f"{', '.join(critical)}\\t{r['text'][:80]}\\n")
+                    with susp_log.open("a", encoding="utf-8") as f:
+                        f.write(f"{r['id']}\\tНЕ ПРИНЯТА: {', '.join(critical)}\\t{r['text'][:80]}\\n")
+                    return "fail"                         # не превращаем заведомый обрыв в готовый WAV           # что прочитано в лучшей попытке — то и в .txt для проверки
                 if why:
                     with susp_log.open("a", encoding="utf-8") as f:
                         f.write(f"{r['id']}\tпосле {attempts} попыток: {', '.join(why)}\t{r['text'][:80]}\n")
@@ -947,13 +956,13 @@ def main():
                         prompts_ref_xv[rkey] = model.model.create_voice_clone_prompt(
                             ref_audio=padded_ref(rw, ref_sil), ref_text="", x_vector_only_mode=True)
                     x, sr, raw, hit, ins = synth_text(model, t_use, prompts_ref_xv[rkey] if st_["xv"] else prompts_ref[rkey],
-                                                      cap, nonstream=st_["ns"], suffix=tail_sfx, split=split_sent,
+                                                      cap, nonstream=st_["ns"], suffix=tail_sfx, split=split_sent and not bool(req.get("atomic")),
                                                       pause_s=sent_pause, min_letters=split_min,
                                                       ref_hz=ref_f0(rw) if vguard else None, role="проба:" + rw.stem,
                                                       info=vinfo)
                 else:
                     x, sr, raw, hit, ins = synth_text(model, t_use, prompt_xv(role) if st_["xv"] else prompt_for(role), cap,
-                                                      nonstream=st_["ns"], suffix=tail_sfx, split=split_sent,
+                                                      nonstream=st_["ns"], suffix=tail_sfx, split=split_sent and not bool(req.get("atomic")),
                                                       pause_s=sent_pause, min_letters=split_min, ref_hz=ref_hz_for(role),
                                                       role=role, info=vinfo)
             except Exception as e_xv:
@@ -974,6 +983,11 @@ def main():
             if not why:
                 break
         score, x, why, met, st_, att, sr = best
+        critical = [w for w in why if w == "лимит" or w == "обрыв"
+                    or w.startswith(("обрублен конец", "оборвана гласная", "мало речи", "нет речи", "быстро"))]
+        if critical:
+            return dict(ok=False, error="запись не принята: " + ", ".join(critical), why=why,
+                        attempts=att, tried=done_k, role=role, text=text, worker=args.worker)
         how = ", ".join(w for w, on in (("голос по отпечатку образца", st_["xv"] and not xv),
                                         ("точка на конце", st_["dot"])) if on) if st_["extra"] else ""
         out = Path(str(req["out"]))
