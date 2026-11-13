@@ -3149,7 +3149,71 @@ class Studio:
             out.append(f"{mmss(t0 / sp)}  {who}: {ef['tech']}" + (f"   [{', '.join(tags)}]" if tags else ""))
         return "\n".join(out) + "\n"
 
+    def _assert_export_current(self, a: int, b: int, meta: dict):
+        """Refuse to publish a render if rows/settings changed while the expensive encoding ran.
+
+        Call while holding self.lock. timeline() uses the same RLock, so this comparison and
+        subsequent sidecar/mix publication form one consistent commit window.
+        """
+        current, _ = self.timeline(a, b, False)
+        if current.get("ver") != meta.get("ver"):
+            raise Oops("книга или параметры сборки изменились во время экспорта; старый готовый файл сохранён. "
+                       "Запустите сборку ещё раз для текущей редакции.")
+
     def export_part(self, k: int) -> dict:
+        p = self.open_part(k)
+        a, b = p["a"], p["b"]
+        name = f"{self.title} — часть {k:02d} ({self.rows[a]['ch_title']})"
+        out = self.final_parts / f"part_{k:02d}.{self.fmt}"
+        stage_dir = out.parent / f".{out.stem}.stage-{secrets.token_hex(8)}"
+        stage_dir.mkdir(parents=True, exist_ok=False)
+        staged_voice = stage_dir / out.name
+        try:
+            with self.rlock, Op(self, f"готовая часть {k}") as op:
+                meta, audio = self.timeline(a, b, True, op)
+                op.stage(f"запись {self.fmt} с выравниванием громкости")
+                total = self._encode(audio, meta["sr"], meta["chapters"], staged_voice, name)
+                meta["ref"] = round(active_rms(audio), 5)
+                staged_times = stage_dir / f"part_{k:02d}.times.tsv"
+                staged_tech = stage_dir / f"part_{k:02d}.tech.txt"
+                write_atomic(staged_times, self._times_tsv(meta))
+                write_atomic(staged_tech, self._tech_txt(meta, f"часть {k:02d}"))
+                mf = self.render_dir / f"part_{k:02d}.json"
+                staged_meta = stage_dir / mf.name
+
+                with self.lock:
+                    self._assert_export_current(a, b, meta)
+                    # Mixing reads cues and sound files from the mutable store. Keep the short
+                    # publication/mix window locked so cue edits cannot be half-applied.
+                    op.stage("сведение со звуками и музыкой")
+                    vs = self._export_mixes(a, b, meta, staged_voice, "chasti", name,
+                                            audio=audio, sr=meta["sr"], op=op)
+                    mix = vs.get("all")
+                    if (read_json(mf, None) or {}).get("ver") != meta["ver"]:
+                        write_atomic(staged_meta, jd(meta))
+
+                    # All expensive voice encoding happened in a unique staging directory.
+                    # The old final voice and its sidecars remain intact if rendering or freshness
+                    # validation fails before this point.
+                    os.replace(staged_voice, out)
+                    os.replace(staged_times, out.with_name(f"part_{k:02d}.times.tsv"))
+                    os.replace(staged_tech, out.with_name(f"part_{k:02d}.tech.txt"))
+                    if staged_meta.exists():
+                        os.replace(staged_meta, mf)
+                    op.stage("копия на Яндекс Диск")
+                    disk = self._to_disk(out, "chasti")
+                    op.note = self._export_note(out, total, mix, disk, vs)
+
+                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, mix=mix, vars=vs,
+                              csig=self.cues_sig(a, b), kv=2)
+                    if k < 1 or k > len(self.store["parts"]):
+                        raise Oops(f"часть {k} изменилась во время экспорта; готовый файл сохранён отдельно")
+                    self.store["parts"][k - 1]["export"] = ex
+                    self.save(f"собрана готовая часть {k}", {"file": str(out), "dur": ex["dur"]})
+            return ex
+        finally:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+
         p = self.open_part(k)
         name = f"{self.title} — часть {k:02d} ({self.rows[p['a']]['ch_title']})"
         with self.rlock, Op(self, f"готовая часть {k}") as op:
@@ -3322,26 +3386,40 @@ class Studio:
 
     def export_chapter(self, c: int) -> dict:
         a, b, title = self.chapter_range(c)
-        with self.rlock, Op(self, f"глава {c} отдельным файлом") as op:
-            meta, audio = self.timeline(a, b, True, op)
-            out = self.final_ch / f"{c:02d} {safe_file(title)}.{self.fmt}"
-            op.stage(f"запись {self.fmt} с выравниванием громкости")
-            total = self._encode(audio, meta["sr"], meta["chapters"], out, f"{self.title} — {title}")
-            write_atomic(out.with_suffix(".tech.txt"), self._tech_txt(meta, title))
-            meta["ref"] = round(active_rms(audio), 5)
-            op.stage("сведение со звуками и музыкой")
-            vs = self._export_mixes(a, b, meta, out, "glavy", f"{self.title} — {title}", audio=audio, sr=meta["sr"], op=op)
-            mix = vs.get("all")
-            op.stage("копия на Яндекс Диск")
-            disk = self._to_disk(out, "glavy")
-            op.note = self._export_note(out, total, mix, disk, vs)
-        with self.lock:
-            lk = sum(1 for i in range(a, b + 1) if (self.store["segs"].get(self.uids[i]) or {}).get("locked"))
-            ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, locked=lk, count=b - a + 1,
-                      mix=mix, vars=vs, csig=self.cues_sig(a, b))
-            self.store["chapters"].setdefault(str(c), {})["export"] = ex
-            self.save(f"собрана глава {c}", {"file": str(out)})
-        return ex
+        out = self.final_ch / f"{c:02d} {safe_file(title)}.{self.fmt}"
+        stage_dir = out.parent / f".{out.stem}.stage-{secrets.token_hex(8)}"
+        stage_dir.mkdir(parents=True, exist_ok=False)
+        staged_voice = stage_dir / out.name
+        try:
+            with self.rlock, Op(self, f"глава {c} отдельным файлом") as op:
+                meta, audio = self.timeline(a, b, True, op)
+                op.stage(f"запись {self.fmt} с выравниванием громкости")
+                total = self._encode(audio, meta["sr"], meta["chapters"], staged_voice, f"{self.title} — {title}")
+                meta["ref"] = round(active_rms(audio), 5)
+                staged_tech = stage_dir / out.with_suffix(".tech.txt").name
+                write_atomic(staged_tech, self._tech_txt(meta, title))
+
+                with self.lock:
+                    self._assert_export_current(a, b, meta)
+                    op.stage("сведение со звуками и музыкой")
+                    vs = self._export_mixes(a, b, meta, staged_voice, "glavy", f"{self.title} — {title}",
+                                            audio=audio, sr=meta["sr"], op=op)
+                    mix = vs.get("all")
+                    os.replace(staged_voice, out)
+                    os.replace(staged_tech, out.with_suffix(".tech.txt"))
+                    op.stage("копия на Яндекс Диск")
+                    disk = self._to_disk(out, "glavy")
+                    op.note = self._export_note(out, total, mix, disk, vs)
+
+                    lk = sum(1 for i in range(a, b + 1)
+                             if (self.store["segs"].get(self.uids[i]) or {}).get("locked"))
+                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, locked=lk,
+                              count=b - a + 1, mix=mix, vars=vs, csig=self.cues_sig(a, b))
+                    self.store["chapters"].setdefault(str(c), {})["export"] = ex
+                    self.save(f"собрана глава {c}", {"file": str(out)})
+            return ex
+        finally:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
     # ================================================================== ЗВУКИ, ФОН И МУЗЫКА (дорожки на ленте)
     # Заглушка (cue) — место на ленте, привязанное к фразе: {id, kind sfx|amb|mus, label, uid, at "s"|"e", off c,
