@@ -5792,6 +5792,33 @@ class Studio:
                 return True
         return False
 
+    def _proj_asset_conflicts(self, files: dict) -> list:
+        """Find same-name, same-size imported assets whose content differs from the project archive.
+
+        The loader must not treat size equality as proof of identity. Different-sized collisions
+        already receive a distinct destination name; same-sized mismatches are reported and fail closed
+        because sound/cue and original-import references must not silently point at local content.
+        """
+        conflicts = []
+        for arc, value in files.items():
+            kind = arc.split("/", 1)[0]
+            name = Path(arc).name
+            if kind not in ("imports", "sounds") or not name or name == "index.json":
+                continue
+            size = value[0] if isinstance(value, list) and value else value
+            digest = value[1] if isinstance(value, list) and len(value) > 1 else None
+            try:
+                size = int(size)
+            except (TypeError, ValueError):
+                continue
+            directory = self.dir / "imports" if kind == "imports" else self.sounds_dir
+            local = directory / name
+            if not local.is_file() or local.stat().st_size != size:
+                continue
+            if not digest or self._sha_file(local) != str(digest):
+                conflicts.append(arc)
+        return sorted(conflicts)
+
     @staticmethod
     def _span(ns: list) -> str:
         ns = sorted(x for x in ns if isinstance(x, int))
@@ -5816,6 +5843,7 @@ class Studio:
         local_home = self.home_id(create=False)
         foreign = not local_home or m.get("home") != local_home
         au = self._proj_audio_check(files, need, foreign=foreign)
+        asset_conflicts = self._proj_asset_conflicts(files)
         warn = []
         if not cp["same"] and cp["lost"]:
             warn.append(f"Книга с тех пор переразбита: из {cp['total']} правок проекта свои фразы найдут {cp['found']}, "
@@ -5830,6 +5858,10 @@ class Studio:
         if au["unverified"]:
             warn.append(f"В другой папке студии найдено {au['unverified']} одноимённых локальных записей без WAV внутри проекта. "
                         "Их содержимое не подтверждено: при первом импорте они не будут автоматически подставлены вместо исходных дублей.")
+        if asset_conflicts:
+            sample = ", ".join(asset_conflicts[:5])
+            warn.append(f"Конфликт пользовательских звуков/исходников с тем же именем и размером, но другим содержимым: "
+                        f"{len(asset_conflicts)} ({sample}). Загрузка остановится, чтобы не подставить местный файл вместо проектного.")
         if au["missing"]:
             warn.append(f"Записей не найдено или их нельзя безопасно сопоставить: {au['missing']}. У таких фраз "
                         f"будет пометка «потерян дубль» — их можно переозвучить или вернуть к черновой записи.")
@@ -5844,8 +5876,8 @@ class Studio:
                         + " — у таких фраз останется роль из разметки.")
         if foreign:
             warn.append("Проект сохранён в другой папке или на другом компьютере: его записи лягут отдельно от здешних.")
-        return dict(ok=True, name=name, info=info, now=cur, proj=pc, compat=cp, audio=au, warn=warn,
-                    busy=self._proj_busy_why(), why="")
+        return dict(ok=True, name=name, info=info, now=cur, proj=pc, compat=cp, audio=au,
+                    asset_conflicts=asset_conflicts, warn=warn, busy=self._proj_busy_why(), why="")
 
     def _zip_extract(self, zf, arc: str, dst: Path, want_sha=None):
         import zipfile
@@ -5908,6 +5940,12 @@ class Studio:
             if cp["other"]:
                 raise Oops(f"это проект другой книги («{m.get('title') or '?'}»): из {cp['total']} его правок в этой книге "
                            f"нашлись {cp['found']}. Сюда он не загружается")
+            asset_conflicts = self._proj_asset_conflicts(files)
+            if asset_conflicts:
+                sample = ", ".join(asset_conflicts[:5])
+                raise Oops(f"проект содержит пользовательские звуки/исходники, которые совпадают с местными по имени и размеру, "
+                           f"но отличаются по содержимому ({len(asset_conflicts)}: {sample}). Загрузка отменена без изменений. "
+                           "Сначала освободите/переименуйте конфликтующие местные копии или перенесите проект в отдельную папку студии.")
             # 1. нынешнее состояние — в точку возврата: загрузку всегда можно отыграть назад
             snap = self.project_save(note="перед загрузкой проекта", kind="auto")
             stat = dict(have=0, added=0, remapped=0, trash=0, missing=0, damaged=0)
