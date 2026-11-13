@@ -90,17 +90,16 @@ class PartDurationPlanningTests(unittest.TestCase):
                 "n": 1, "start_id": "1", "end_id": "2",
                 "start": "old-1", "end": "old-2",
             }]), encoding="utf-8")
-            with patch.object(n, "PARTS_INDEX", index), \\
-                 patch.object(n, "DUR_CACHE", root / "durations.json"), \\
-                 patch.object(n, "PAUSE", {"para": 1000}), \\
-                 patch.object(n, "load_durations", return_value={}), \\
-                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \\
+            with patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "PAUSE", {"para": 1000}), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \
                  patch.object(n, "duration_of", return_value=40.0):
                 with self.assertRaisesRegex(ValueError, "другой редакции"):
                     n.plan_parts(rows, {}, 2.0)
 
     def test_frozen_part_signature_detects_middle_segment_edits(self):
-        import hashlib
         import json
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -117,11 +116,11 @@ class PartDurationPlanningTests(unittest.TestCase):
                 "n": 1, "start_id": "1", "end_id": "3",
                 "start": keys[0], "end": keys[-1], "sig": "old-signature",
             }]), encoding="utf-8")
-            with patch.object(n, "PARTS_INDEX", index), \\
-                 patch.object(n, "DUR_CACHE", root / "durations.json"), \\
-                 patch.object(n, "PAUSE", {"para": 1000}), \\
-                 patch.object(n, "load_durations", return_value={}), \\
-                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \\
+            with patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "PAUSE", {"para": 1000}), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "wav_for", side_effect=lambda row, roles: wavs[str(row["id"])]), \
                  patch.object(n, "duration_of", return_value=40.0):
                 with self.assertRaisesRegex(ValueError, "содержимое части изменилось"):
                     n.plan_parts(rows, {}, 2.0)
