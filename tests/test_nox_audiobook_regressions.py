@@ -205,7 +205,7 @@ class BookEditionSnapshotTests(unittest.TestCase):
             self.assertNotEqual(snapshot, second)
             self.assertIn("old edition", original_csv)
             self.assertIn("original", original_roles)
-            self.assertIn('"start_id": "1"', original_index)
+            self.assertEqual("1", json.loads(original_index)[0]["start_id"])
             self.assertIn("old edition", original_map)
             self.assertEqual("previous-book-audio", (parts / "part_01.m4b").read_bytes())
             self.assertEqual(False, manifest["audio_copied"])
