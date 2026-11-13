@@ -159,6 +159,95 @@ class PartDurationPlanningTests(unittest.TestCase):
                     n.plan_parts([], {}, 2.0, speed=speed)
 
 
+class PartsIndexRecoveryTests(unittest.TestCase):
+    def test_corrupt_parts_index_is_preserved_and_never_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            index = root / "parts.json"
+            damaged = '{"n": 1,'
+            index.write_text(damaged, encoding="utf-8")
+
+            with patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "load_durations", return_value={}):
+                with self.assertRaisesRegex(ValueError, "повреждён"):
+                    n.plan_parts([], {}, 2.0)
+
+            self.assertEqual(damaged, index.read_text(encoding="utf-8"))
+
+    def test_non_list_parts_index_is_rejected_without_rewriting_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            index = root / "parts.json"
+            original = '{"parts": []}'
+            index.write_text(original, encoding="utf-8")
+
+            with patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "load_durations", return_value={}):
+                with self.assertRaisesRegex(ValueError, "неизвестную структуру"):
+                    n.plan_parts([], {}, 2.0)
+
+            self.assertEqual(original, index.read_text(encoding="utf-8"))
+
+    def test_orphan_existing_part_file_is_not_silently_reused_without_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parts = root / "parts"
+            parts.mkdir()
+            index = root / "work" / "parts.json"
+            orphan = parts / "part_01.m4b"
+            orphan.write_bytes(b"old-edition-audio")
+            wav = root / "voice.wav"
+            wav.write_bytes(b"wav")
+            row = {"id": 1, "speaker": "narrator", "text": "new edition",
+                   "pause_before_ms": 0, "kind": "text", "ch_title": "Chapter"}
+
+            with patch.object(n, "PARTS", parts), \
+                 patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "wav_for", return_value=wav), \
+                 patch.object(n, "duration_of", return_value=120.0):
+                with self.assertRaisesRegex(ValueError, "не подтверждает содержимое"):
+                    n.build_parts([row], {}, 2.0, "Book", "Author", "96k", quiet=True)
+
+            self.assertEqual(b"old-edition-audio", orphan.read_bytes())
+            self.assertFalse(index.exists())
+
+    def test_part_output_checksum_mismatch_is_not_silently_accepted(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parts = root / "parts"
+            parts.mkdir()
+            index = root / "parts.json"
+            output = parts / "part_01.m4b"
+            output.write_bytes(b"edited-or-damaged-audio")
+            wav = root / "voice.wav"
+            wav.write_bytes(b"wav")
+            row = {"id": 1, "speaker": "narrator", "text": "same text",
+                   "pause_before_ms": 0, "kind": "text", "ch_title": "Chapter"}
+            import hashlib
+            sig = hashlib.sha256(wav.stem.encode("utf-8")).hexdigest()
+            index.write_text(json.dumps([{
+                "n": 1, "start_id": "1", "end_id": "1",
+                "start": wav.stem, "end": wav.stem, "sig": sig,
+                "output_sha256": "0" * 64,
+            }]), encoding="utf-8")
+
+            with patch.object(n, "PARTS", parts), \
+                 patch.object(n, "PARTS_INDEX", index), \
+                 patch.object(n, "DUR_CACHE", root / "durations.json"), \
+                 patch.object(n, "load_durations", return_value={}), \
+                 patch.object(n, "wav_for", return_value=wav), \
+                 patch.object(n, "duration_of", return_value=120.0):
+                with self.assertRaisesRegex(ValueError, "контрольная сумма не совпадает"):
+                    n.build_parts([row], {}, 2.0, "Book", "Author", "96k", quiet=True)
+
+            self.assertEqual(b"edited-or-damaged-audio", output.read_bytes())
+
+
 class DurationCacheTests(unittest.TestCase):
     def test_cache_invalidates_when_wav_changes(self):
         fake_sf = types.SimpleNamespace(
