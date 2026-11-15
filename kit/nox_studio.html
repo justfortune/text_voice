@@ -1515,8 +1515,16 @@ async function lockUpTo(s){
   catch(e){ fail(e); }
 }
 async function endHere(s){
-  dialog('<h3>Закончить часть ' + S.n + ' на фразе № ' + esc(s.id) + '?</h3><p>Следующая часть начнётся со следующей фразы. Так можно закончить часть на конце сцены, а не посреди неё.</p>',
-    [["Отмена"], ["Закончить часть здесь", async () => { try { const r = await api("/api/boundary", {part:S.n, uid:s.uid}); S.sel = null; S.ed = null; setPart(r.part, true); await loadState(); drawTop(); } catch(e){ fail(e); } }, "pri"]]);
+  const autoRunning = (S.auto || {}).state === "run";
+  const note = autoRunning
+    ? ' <p class="note">Сейчас работает режим «Вся книга». Сначала нажмите «Пауза». После переноса границы можно нажать «Продолжить книгу». Студия не меняет план, пока конвейер работает.</p>'
+    : ' <p>Следующая часть начнётся со следующей фразы. После переноса обе незакреплённые части пересчитают опорный темп; прежний экспорт соседней части останется на диске, но будет помечен устаревшим.</p>';
+  dialog('<h3>Закончить часть ' + S.n + ' на фразе № ' + esc(s.id) + '?</h3>' + note,
+    [["Отмена"], ["Закончить часть здесь", async () => {
+      if((S.auto || {}).state === "run"){ toast("Сначала поставьте «Вся книга» на паузу. Граница не изменена.", "red", 7000); return; }
+      try { const r = await api("/api/boundary", {part:S.n, uid:s.uid}); S.sel = null; S.ed = null; setPart(r.part, true); await loadState(); drawTop(); }
+      catch(e){ fail(e); }
+    }, "pri"]]);
 }
 async function ruleDialog(s, c, scope){
   if(!c) return;

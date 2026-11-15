@@ -87,6 +87,11 @@ class StudioFrontendTests(unittest.TestCase):
         self.assertIn('$("#sheet")', self.html)
         self.assertIn('$("#insp")', self.html)
 
+    def test_boundary_editor_requires_pause_during_whole_book_automation(self):
+        self.assertIn('const autoRunning = (S.auto || {}).state === "run";', self.html)
+        self.assertIn("Сначала нажмите «Пауза»", self.html)
+        self.assertIn('if((S.auto || {}).state === "run"){ toast("Сначала поставьте «Вся книга» на паузу.', self.html)
+
     def test_whole_book_dialog_distinguishes_missing_chapters_from_remaining_parts(self):
         self.assertIn("a.parts_done", self.html)
         self.assertIn("все части уже озвучены и закреплены", self.html)

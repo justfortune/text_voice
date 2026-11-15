@@ -159,6 +159,48 @@ class PartDurationPlanningTests(unittest.TestCase):
                     n.plan_parts([], {}, 2.0, speed=speed)
 
 
+class TrimSilenceTests(unittest.TestCase):
+    def test_soft_fading_tail_is_kept_with_relative_threshold_and_longer_tail_pad(self):
+        import numpy as np
+
+        sr = 24000
+        duration = 0.70
+        t = np.arange(int(sr * duration), dtype=np.float32) / sr
+        envelope = np.where(t < 0.12, 1.0, np.exp(-(t - 0.12) / 0.10))
+        voice = (0.25 * envelope * np.sin(2 * np.pi * 185 * t)).astype("float32")
+        source = np.concatenate((
+            np.zeros(int(sr * 0.12), dtype="float32"),
+            voice,
+            np.zeros(int(sr * 0.30), dtype="float32"),
+        ))
+
+        trimmed = n.trim_silence(source, sr)
+        self.assertGreaterEqual(len(trimmed), int(sr * 0.90))
+        voice_start_in_trim = int(sr * 0.06)
+        final_syllable = trimmed[voice_start_in_trim + int(sr * 0.65):voice_start_in_trim + int(sr * 0.70)]
+        self.assertGreater(float(np.sqrt(np.mean(np.square(final_syllable)))), 1e-4)
+
+    def test_trim_threshold_is_scale_invariant_for_quiet_and_loud_recordings(self):
+        import numpy as np
+
+        sr = 24000
+        t = np.arange(sr // 2, dtype=np.float32) / sr
+        voice = (0.3 * np.sin(2 * np.pi * 190 * t) * np.exp(-t / 0.18)).astype("float32")
+        source = np.concatenate((np.zeros(sr // 10, dtype="float32"), voice,
+                                 np.zeros(sr // 3, dtype="float32")))
+        loud = n.trim_silence(source, sr)
+        quiet = n.trim_silence(source * 0.02, sr)
+        self.assertLessEqual(abs(len(loud) - len(quiet)), 1)
+
+    def test_silent_input_is_returned_unchanged(self):
+        import numpy as np
+
+        source = np.zeros(1024, dtype="float32")
+        trimmed = n.trim_silence(source, 24000)
+        self.assertEqual(len(source), len(trimmed))
+        self.assertTrue(np.array_equal(source, trimmed))
+
+
 class BookEditionSnapshotTests(unittest.TestCase):
     def _fixture(self, root):
         work = Path(root) / "work"

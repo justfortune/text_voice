@@ -3288,6 +3288,7 @@ class Studio:
                 staged_meta = stage_dir / mf.name
 
                 with self.lock:
+                    self._assert_part_range_current(k, a, b)
                     self._assert_export_current(a, b, meta, anchors)
                     if (k < 1 or k > len(self.store["parts"])
                             or self.store["parts"][k - 1].get("last") != anchors[1][0]):
@@ -4758,30 +4759,64 @@ class Studio:
 
     # ------------------------------------------------------------------ граница части
     def set_boundary(self, k: int, uid: str):
-        """Закончить часть k на этой фразе (следующая часть начнётся со следующей). Только на границе абзаца и пока обе
-        части не закреплены."""
-        self.auto_guard("перенести границу части")
+        """Перенести границу двух соседних частей как одну правку.
+
+        Во время «Вся книга» изменение запрещено: сначала поставьте автомат на паузу,
+        чтобы go/воркеры не продолжали озвучивать старую границу. При сдвиге сбрасываем
+        опорный темп обеих затронутых частей; экспорт соседней части остаётся в истории
+        и будет распознан как устаревший по новой версии таймлайна.
+        """
         with self.lock:
-            self.open_part(k)
+            self.auto_guard("перенести границу части")
             pl = self.plan()
-            p, i = pl[k - 1], self.idx_of.get(uid)
+            if not isinstance(k, int) or k < 1 or k > len(pl):
+                raise Oops("такой части пока нет")
+            p = pl[k - 1]
+            if not p["opened"]:
+                raise Oops("сначала откройте часть, затем перенесите её границу")
+            i = self.idx_of.get(uid)
             if i is None:
                 raise Oops("этой фразы больше нет в книге — обновите окно")
             nxt = pl[k] if k < len(pl) else None
             hi = nxt["b"] - 1 if nxt else len(self.rows) - 1
             if not (p["a"] <= i <= hi):
                 raise Oops("границу можно двигать в пределах этой и следующей части")
-            if self.store["parts"][k - 1].get("locked") or (nxt and nxt["opened"] and self.store["parts"][k].get("locked")):
+            current_rec = self.store["parts"][k - 1]
+            next_rec = self.store["parts"][k] if nxt and nxt["opened"] and k < len(self.store["parts"]) else None
+            if current_rec.get("locked") or (next_rec and next_rec.get("locked")):
                 raise Oops("часть закреплена — сначала снимите закрепление")
+
             i = self.pipe_at(i, p["a"])                    # вставка — граница по её опорной реплике
             t2 = self.ins_tail(i)
+            if t2 < p["a"] or t2 > hi:
+                raise Oops("граница после учёта вставленных фраз вышла за пределы соседних частей")
+            if t2 == p["b"]:
+                raise Oops("часть уже заканчивается на этой фразе")
             r2 = self.rows[t2 + 1] if t2 + 1 < len(self.rows) else None
             if r2 is not None and not (r2["kind"] == "head" or int(r2["pause_before_ms"]) >= n.PAUSE["para"]):
                 raise Oops("часть должна кончаться на конце абзаца — выберите последнюю фразу абзаца")
-            rec = self.store["parts"][k - 1]
-            rec["last"], rec["last_i"], rec["last_p"], rec["export"] = self.uids[i], i, self.pidx[i], None
+
+            # One save covers both sides of the boundary. A failed write restores the in-memory plan.
+            old_parts = copy.deepcopy(self.store["parts"])
+            old_cache = self._parts_cache
+            current_rec["last"], current_rec["last_i"], current_rec["last_p"] = self.uids[i], i, self.pidx[i]
+            current_rec["eq"] = None
+            current_rec["export"] = None
+            if next_rec is not None:
+                next_rec["eq"] = None
             self._parts_cache = None
-            self.save(f"граница части {k} перенесена", {"part": k, "uid": uid})
+            try:
+                self.save(f"граница части {k} перенесена", {"part": k, "uid": uid, "next_part": k + 1 if next_rec else None})
+            except Exception:
+                self.store["parts"] = old_parts
+                self._parts_cache = old_cache
+                raise
+
+    def _assert_part_range_current(self, k: int, a: int, b: int) -> None:
+        """Do not publish an export if either edge moved while its audio was being rendered."""
+        pl = self.plan()
+        if k < 1 or k > len(pl) or pl[k - 1]["a"] != a or pl[k - 1]["b"] != b:
+            raise Oops(f"границы части {k} изменились во время экспорта; старый готовый файл сохранён. Соберите часть заново.")
 
     # ------------------------------------------------------------------ движок (воркеры озвучки)
     def workers(self) -> list:

@@ -1171,17 +1171,30 @@ def load_qwen(model_id: str, attn: str):
     return model
 
 
-def trim_silence(wav, sr, thresh_db=-42.0, pad_ms=60):
+def trim_silence(wav, sr, thresh_db=-48.0, pad_ms=60, tail_pad_ms=220):
+    """Убирает тишину по краям, не отрезая тихое затухание последнего слога.
+
+    Порог считается относительно пика самой записи: тихий дубль обрабатывается так же,
+    как громкий. Спереди оставляем привычные 60 мс, после последнего слышимого отсчёта
+    — отдельный запас 220 мс для затухающей гласной/согласной и звукового хвоста.
+    """
     import numpy as np
     x = np.asarray(wav, dtype="float32")
     if x.ndim > 1:
         x = x.mean(axis=1)
-    amp = 10 ** (thresh_db / 20)
-    idx = np.where(np.abs(x) > amp)[0]
+    if x.size == 0:
+        return x
+    peak = float(np.max(np.abs(x)))
+    if not np.isfinite(peak) or peak <= 1e-12:
+        return x
+    amp = peak * (10 ** (float(thresh_db) / 20))
+    idx = np.flatnonzero(np.abs(x) > amp)
     if len(idx) == 0:
         return x
-    pad = int(sr * pad_ms / 1000)
-    a, b = max(0, idx[0] - pad), min(len(x), idx[-1] + pad)
+    start_pad = max(0, int(sr * max(0, pad_ms) / 1000))
+    end_pad = max(0, int(sr * max(0, tail_pad_ms) / 1000))
+    a = max(0, int(idx[0]) - start_pad)
+    b = min(len(x), int(idx[-1]) + end_pad + 1)
     return x[a:b]
 
 
