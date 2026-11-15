@@ -728,5 +728,30 @@ class LockTests(unittest.TestCase):
             n.release(wav)
 
 
+class PipelineModeContractTests(unittest.TestCase):
+    def test_sequential_mode_does_not_require_asr_acceptance(self):
+        patcher = (ROOT / "kit" / "prep_kniga1a.ps1").read_text(encoding="utf-8")
+        self.assertIn('_mode = globals().get("by_parts")', patcher)
+        self.assertIn("if callable(_mode) and _mode():\n        return False", patcher)
+        self.assertIn("ASR блокирует готовность только в автоматическом режиме", patcher)
+
+    def test_part_planner_workers_and_collector_share_one_duration_contract(self):
+        part = (ROOT / "kit" / "nox_part.py").read_text(encoding="utf-8")
+        patcher = (ROOT / "kit" / "prep_kniga1a.ps1").read_text(encoding="utf-8")
+        studio = (ROOT / "kit" / "nox_studio.py").read_text(encoding="utf-8")
+        self.assertIn("n.part_source_seconds(minutes, float(a.speed or 1.0))", part)
+        self.assertIn("part_source_seconds(minutes, speed)", patcher)
+        self.assertIn("part_source_seconds(float(SETTINGS.get(\"part_min\", 19) or 19), 1.0)", patcher)
+        self.assertIn("plan_parts(rows, roles, minutes, upto, speed=speed)", patcher)
+        self.assertIn("part_source_seconds(self.part_min, self.speed)", studio)
+        self.assertNotIn("max(n.TEMPO_G, 1.0)", part)
+
+    def test_sequential_workers_do_not_wait_for_whole_book_asr(self):
+        fast = (ROOT / "kit" / "nox_fast.py").read_text(encoding="utf-8")
+        self.assertIn("if not todo and (BP or not asr_alive())", fast)
+        self.assertIn("if time.time() - idle_t > 30 * 60 and (BP or not asr_alive())", fast)
+        self.assertIn("if asr_alive() and not BP:", fast)
+
+
 if __name__ == "__main__":
     unittest.main()

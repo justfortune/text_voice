@@ -578,7 +578,7 @@ def main():
         except OSError:
             return False
 
-    if not todo and not asr_alive() and not args.serve:
+    if not todo and (BP or not asr_alive()) and not args.serve:
         print(tag, "все сегменты уже озвучены")
         return
     order = [r for i, r in enumerate(rows) if i not in fxs]
@@ -587,7 +587,7 @@ def main():
     print(f"{tag} " + (f"режим «по частям»: работаю только над первой незакреплённой частью и после неё останавливаюсь "
                        f"(во всей книге не озвучено {len(todo)} из {total_all})" if BP else f"осталось {len(todo)}/{total_all} сегментов")
           + (f" (закреплено автором и не трогается: {len(fxs)})" if fxs else "")
-          + ("; проверка распознаванием включена — отбракованное переозвучиваю сам" if asr_alive() else ""), flush=True)
+          + ("; проверка распознаванием включена — отбракованное переозвучиваю сам" if asr_alive() and not BP else ""), flush=True)
 
     state = {"model": None}
     stems = n.voice_stems(roles)
@@ -1158,7 +1158,7 @@ def main():
                       "(чаще всего у роли нет образца голоса) и запустите go ещё раз", flush=True)
                 return
             # всё в окне озвучено: идёт проверка и сборка; отбракованное вернётся сюда как «нет записи»
-            if time.time() - idle_t > 30 * 60 and not asr_alive():
+            if time.time() - idle_t > 30 * 60 and (BP or not asr_alive()):
                 print(f"{tag} часть {w[2]} не собрана за полчаса простоя (сборка nox_part.py не работает?) — выхожу", flush=True)
                 return
             for _ in range(10):

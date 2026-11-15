@@ -273,11 +273,13 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
 #insp #btTech{width:100%;min-height:145px;font:17px/1.5 var(--serif);resize:vertical;background:var(--sheet);border:1px solid var(--rule);border-radius:3px;padding:8px}
 #insp .bt-lock-note{margin-top:12px;color:var(--stamp);line-height:1.5}
 #insp .bt-status{margin-top:8px;min-height:18px;color:var(--ink2);font-size:12px}
-body.book-text-mode{grid-template-rows:auto 1fr auto}
-body.book-text-mode #transport,body.book-text-mode #tl{display:none}
-body.book-text-mode .partnav{display:none}
+/* Manuscript editing stays inside the original Studio shell. The transport and timeline are never replaced. */
 body.book-text-mode #sheetWrap{padding:0 0 14px}
 body.book-text-mode #sheet{max-width:920px;margin:0 auto 14px;padding:10px 0 24px;min-height:0}
+#tl{position:relative}
+#btNoAudio{position:absolute;inset:0;display:none;place-items:center;padding:24px;text-align:center;color:var(--ink2);font:14px/1.5 var(--ui);pointer-events:none;z-index:2}
+body.book-text-mode.book-no-audio #btNoAudio{display:grid}
+body.book-text-mode.book-no-audio #cv,body.book-text-mode.book-no-audio #mini,body.book-text-mode.book-no-audio #hsb{visibility:hidden}
 
 #load[hidden]{display:none}
 #loadSub{position:fixed;left:0;right:0;top:calc(50% + 24px);text-align:center;z-index:41;color:var(--blue);font-size:14px;pointer-events:none}
@@ -413,7 +415,7 @@ body.book-text-mode #sheet{max-width:920px;margin:0 auto 14px;padding:10px 0 24p
   </div>
 </section>
 
-<section id="tl"><canvas id="cv"></canvas><canvas id="mini"></canvas>
+<section id="tl"><canvas id="cv"></canvas><canvas id="mini"></canvas><div id="btNoAudio">Рукопись загружена. Аудиозаписей пока нет — после первой собранной части здесь появятся волна, таймкоды и прослушивание.</div>
   <div id="hsb" title="Прокрутка ленты: тяните ползунок; щелчок по полосе — на экран в сторону; колесо мыши над лентой — тоже прокрутка"><button id="hsbL" type="button" aria-label="Ленту влево">‹</button><div id="hsbTr"><div id="hsbT"></div></div><button id="hsbR" type="button" aria-label="Ленту вправо">›</button></div>
   <div id="laneHint" hidden><span>Дорожки пусты: звуков, фона и музыки в этой части пока нет.</span><button id="lhKit" type="button" title="Отметки звуков, фона и музыки из партитуры книги появятся на дорожках со своими файлами и громкостями">Взять партитуру книги</button><button id="lhScan" type="button" title="Студия найдёт в тексте части места для звуков и поставит подписанные заглушки">Найти места по тексту</button></div></section>
 
@@ -582,7 +584,18 @@ function stressWatch(){                                         // идёт св
   }, 3500);
 }
 function drawTop(){
-  const p = S.part; if(!p) return;
+  const p = S.part;
+  if(!p){
+    if(BT.active){
+      $("#partBtn").textContent = "Рукопись";
+      $("#partInfo").textContent = "Аудио ещё не создано";
+      $("#prevPart").disabled = true; $("#nextPart").disabled = true;
+      ["#play","#back5","#fwd5","#markBtn","#prevAtt","#nextAtt","#sndBtn","#zout","#zin","#lockPart"].forEach(sel=>{const el=$(sel);if(el)el.disabled=true;});
+      $("#zoomv").textContent = "";
+      $("#goNext").hidden = true; $("#goStop").hidden = true; $("#redoAll").hidden = true;
+    }
+    return;
+  }
   $("#partBtn").textContent = "Часть " + String(p.n).padStart(2,"0");
   const c = {}; for(const s of p.segs) c[s.state] = (c[s.state]||0) + 1;
   const bits = [fmt(p.total, 0), p.segs.length + " фраз"];
@@ -2797,8 +2810,9 @@ async function enterBookTextMode(){
   BT.active=true;BT.returnPart=S.n||0;
   au.pause();aux.pause();
   document.body.classList.add("book-text-mode");
+  document.body.classList.toggle("book-no-audio", !S.part);
   $("#bookTextToolbar").hidden=false;$("#load").hidden=true;
-  btToolbarMarkup();btUpdateToolbar();
+  btToolbarMarkup();btUpdateToolbar();drawTop();
   await btLoadPage();
 }
 async function toggleBookTextMode(){
@@ -2815,13 +2829,14 @@ async function btConfirmPending(){
 async function leaveBookTextMode(){
   if(!BT.active)return true;
   if(!(await btConfirmPending()))return false;
-  BT.active=false;document.body.classList.remove("book-text-mode");
+  BT.active=false;document.body.classList.remove("book-text-mode","book-no-audio");
   $("#bookTextToolbar").hidden=true;BT.selected=null;BT.rows=[];BT.dirty.clear();
   if(!S.parts.length){
     toast("Аудиочастей ещё нет. Редактор текста книги остаётся доступен.","",5000);
-    BT.active=true;document.body.classList.add("book-text-mode");$("#bookTextToolbar").hidden=false;
+    BT.active=true;document.body.classList.add("book-text-mode","book-no-audio");$("#bookTextToolbar").hidden=false;drawTop();
     return false;
   }
+  ["#play","#back5","#fwd5","#markBtn","#prevAtt","#nextAtt","#sndBtn","#zout","#zin","#lockPart"].forEach(sel=>{const el=$(sel);if(el)el.disabled=false;});
   const n=BT.returnPart>=1&&BT.returnPart<=S.parts.length?BT.returnPart:(S.parts.find(p=>!p.locked)||S.parts[0]).n;
   await openPart(n);return true;
 }

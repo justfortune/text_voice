@@ -727,7 +727,7 @@ if "NOX_ASM_V2" not in s:
     )
     s = s[:a_start] + new_asm + s[a_end:]
     # планирование частей — в минутах ВЫХОДА (с учётом темпа)
-    s = s.replace("        if acc >= minutes * 60 and boundary_ok:", "        if acc >= minutes * 60 * max(TEMPO_G, 1.0) and boundary_ok:", 1)
+    s = s.replace("        if acc >= minutes * 60 and boundary_ok:", "        if acc >= part_source_seconds(minutes, speed) and boundary_ok:", 1)
     # CLI: --tempo / --no-equalize у build и watch; установка глобалей после разбора аргументов
     s = s.replace('    w.add_argument("--speed", type=float, default=1.0, help="тот же смысл, что у build --speed")\n',
                   '    w.add_argument("--speed", type=float, default=1.0, help="тот же смысл, что у build --speed")\n'
@@ -2064,6 +2064,11 @@ def _asr_gate():
     # проверка распознаванием включена и проверяльщик жив (его сердцебиение не старше 10 минут)
     if not SETTINGS.get("asr_check"):
         return False
+    # Последовательный режим — автор слушает часть и принимает её вручную.
+    # ASR блокирует готовность только в автоматическом режиме «Вся книга».
+    _mode = globals().get("by_parts")
+    if callable(_mode) and _mode():
+        return False
     if _okv_req():          # NOX_PT_V20: проверка этой книги запущена — сборка ждёт её с первой минуты, даже пока она грузится
         return True
 ''', "_asr_gate")
@@ -2404,7 +2409,7 @@ def work_window(rows, roles):
     except Exception:
         pass
     md = run_mode()
-    target = float(md.get("part_sec") or float(SETTINGS.get("part_min", 19) or 19) * 60 * max(TEMPO_G, 1.0))
+    target = float(md.get("part_sec") or part_source_seconds(float(SETTINGS.get("part_min", 19) or 19), 1.0))
     cache = load_durations()
     # Длина ещё не озвученной реплики оценивается по уже озвученным: d = a + буквы / темп (у каждой записи есть «хвосты»,
     # поэтому короткие реплики идут медленнее длинных). Оценка берётся с запасом в большую сторону (+25 %): окно может
@@ -2460,7 +2465,7 @@ def work_window(rows, roles):
     return i0, len(rows) - 1, num, False
 
 
-def plan_parts(rows, roles, minutes: float, upto=None):
+def plan_parts(rows, roles, minutes: float, upto=None, speed: float=1.0):
     """-> (parts, complete). parts: список (start_idx, end_idx_incl, closed). Границы уже собранных частей
     заморожены в work/parts.json, чтобы номера частей не «ехали» между запусками.
     NOX_PT_V21: закреплённые автором части — в начале цепочки, их записи не проверяются; upto — дальше этой реплики
@@ -2511,7 +2516,7 @@ def plan_parts(rows, roles, minutes: float, upto=None):
     """Собирает закрытые части, которых нет в parts/ ИЛИ в которых переозвучена реплика (NOX_PT_V13).
     Часть, где запись ещё на переозвучке/проверке, ждёт (прежняя версия остаётся) — дыр в частях не бывает.
     NOX_PT_V21: закреплённые автором части не собираются; only=N — собирать только часть N (режим «по частям»)."""
-    parts, ready, complete = plan_parts(rows, roles, minutes, upto)
+    parts, ready, complete = plan_parts(rows, roles, minutes, upto, speed=speed)
     _nfx = len(fixed_prefix(rows))
 ''', "build_parts: начало")
     _rep21('''        entry = {"n": n, "start": wav_for(rows[a], roles).stem, "end": wav_for(rows[b], roles).stem,

@@ -71,12 +71,22 @@ class StudioFrontendTests(unittest.TestCase):
         self.assertIn("NotFoundError", self.html)
         self.assertIn("audioCtx.close()", self.html)
 
-    def test_pre_audio_book_editor_is_integrated_into_native_studio_layout(self):
+    def test_pre_audio_book_editor_preserves_the_native_studio_shell(self):
         self.assertIn('id="btnTextBook"', self.html)
         self.assertIn('id="bookTextToolbar"', self.html)
+        self.assertIn('id="btNoAudio"', self.html)
         self.assertIn('<main>\n  <div id="sheetWrap"', self.html)
         self.assertIn('<aside id="insp"></aside>', self.html)
+        self.assertIn('id="transport"', self.html)
+        self.assertIn('id="tl"', self.html)
+        self.assertIn('class="partnav"', self.html)
         self.assertIn("body.book-text-mode", self.html)
+        self.assertNotIn("body.book-text-mode #transport", self.html)
+        self.assertNotIn("body.book-text-mode #tl", self.html)
+        self.assertNotIn("body.book-text-mode .partnav", self.html)
+        self.assertNotIn("body.book-text-mode{grid-template-rows", self.html)
+        self.assertIn('document.body.classList.toggle("book-no-audio", !S.part);', self.html)
+        self.assertIn('$("#partBtn").textContent = "Рукопись";', self.html)
         self.assertIn('if(!S.parts.length){\n      await enterBookTextMode();', self.html)
         self.assertNotIn("book-editor-wrap", self.html)
         self.assertNotIn('host.classList.add("book-editor")', self.html)
