@@ -249,6 +249,36 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
 .dlg .hits div{margin:3px 0} .dlg .hits small{font:12px var(--ui);color:var(--ink2);margin-right:8px}
 .dlg .hits u{text-decoration:none;background:color-mix(in srgb, var(--blue) 22%, transparent);padding:0 2px;border-radius:2px}
 #load{position:fixed;inset:0;display:grid;place-items:center;background:var(--paper);z-index:40;font-size:17px;color:var(--ink2);text-align:center}
+
+/* Text preparation is embedded in the native Studio shell; it reuses the existing sheet and inspector. */
+#bookTextToolbar{position:sticky;top:0;z-index:5;max-width:920px;margin:0 auto;padding:9px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--sheet);border:1px solid var(--rule);border-bottom:0}
+#bookTextToolbar[hidden]{display:none}
+#bookTextToolbar input,#bookTextToolbar select{background:var(--sheet);border:1px solid var(--rule);border-radius:3px;padding:6px 8px;min-width:0}
+#bookTextToolbar input[type=search]{flex:1 1 190px}
+#bookTextToolbar .bt-meta{color:var(--ink2);font-size:12px;margin-left:auto}
+#sheet .bt-row{display:grid;grid-template-columns:62px 5px minmax(0,1fr) 74px;column-gap:12px;padding:3px 14px 3px 10px;cursor:pointer;border-left:3px solid transparent;align-items:start}
+#sheet .bt-row:hover{background:var(--hover)}
+#sheet .bt-row.selected{border-left-color:var(--ink);background:var(--hover)}
+#sheet .bt-row time{color:var(--ink2);font-size:12.5px;padding-top:6px;text-align:right;font-variant-numeric:tabular-nums}
+#sheet .bt-row .bt-tab{background:var(--c);border-radius:2px;margin:5px 0;opacity:.85;min-height:20px}
+#sheet .bt-row .bt-text{font:19px/1.62 var(--serif);color:var(--text);overflow-wrap:anywhere;white-space:pre-wrap}
+#sheet .bt-row .bt-role{font:600 12.5px/1 var(--ui);color:var(--c);margin-right:9px}
+#sheet .bt-row .bt-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--ink2);font:12px/1.35 var(--ui);margin:2px 0 4px}
+#sheet .bt-row .bt-state{font:11px/1.3 var(--ui);color:var(--ink2);text-align:right;padding-top:6px}
+#sheet .bt-row .bt-state.dirty{color:var(--blue);font-weight:600}
+#sheet .bt-row.bt-heading .bt-text{font:700 23px/1.4 var(--serif);color:var(--ink);padding:7px 0 4px}
+#sheet .bt-pager{display:flex;justify-content:center;align-items:center;gap:9px;padding:16px;color:var(--ink2)}
+#sheet .bt-empty{padding:24px;color:var(--ink2);text-align:center}
+#insp .bt-source{font:16px/1.55 var(--serif);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--paper);border:1px solid var(--rule);border-radius:3px;padding:9px 11px}
+#insp #btTech{width:100%;min-height:145px;font:17px/1.5 var(--serif);resize:vertical;background:var(--sheet);border:1px solid var(--rule);border-radius:3px;padding:8px}
+#insp .bt-lock-note{margin-top:12px;color:var(--stamp);line-height:1.5}
+#insp .bt-status{margin-top:8px;min-height:18px;color:var(--ink2);font-size:12px}
+body.book-text-mode{grid-template-rows:auto 1fr auto}
+body.book-text-mode #transport,body.book-text-mode #tl{display:none}
+body.book-text-mode .partnav{display:none}
+body.book-text-mode #sheetWrap{padding:0 0 14px}
+body.book-text-mode #sheet{max-width:920px;margin:0 auto 14px;padding:10px 0 24px;min-height:0}
+
 #load[hidden]{display:none}
 #loadSub{position:fixed;left:0;right:0;top:calc(50% + 24px);text-align:center;z-index:41;color:var(--blue);font-size:14px;pointer-events:none}
 #load[hidden] + #loadSub{display:none}
@@ -348,6 +378,7 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
   </div>
   <nav>
     <button id="btnProj" title="Сохранить работу в файл проекта, вернуться к сохранённому (Ctrl+S — сохранить, Ctrl+O — это окно)">Проект</button>
+    <button id="btnTextBook" title="Редактор текста и говорящих книги до озвучки">Текст книги</button>
     <button id="btnParts">Части и главы</button>
     <button id="btnBook" title="Озвучить всю книгу как есть: часть за частью, без остановок, с паузой; главы собираются сами">Вся книга</button>
     <button id="btnRules">Правила</button>
@@ -387,7 +418,7 @@ kbd{font:600 12px var(--ui);border:1px solid var(--rule);border-bottom-width:2px
   <div id="laneHint" hidden><span>Дорожки пусты: звуков, фона и музыки в этой части пока нет.</span><button id="lhKit" type="button" title="Отметки звуков, фона и музыки из партитуры книги появятся на дорожках со своими файлами и громкостями">Взять партитуру книги</button><button id="lhScan" type="button" title="Студия найдёт в тексте части места для звуков и поставит подписанные заглушки">Найти места по тексту</button></div></section>
 
 <main>
-  <div id="sheetWrap"><article id="sheet" tabindex="0" aria-label="Технический текст части"></article></div>
+  <div id="sheetWrap"><div id="bookTextToolbar" hidden></div><article id="sheet" tabindex="0" aria-label="Технический текст части"></article></div>
   <aside id="insp"></aside>
 </main>
 
@@ -433,6 +464,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 const au = $("#au"), aux = $("#aux"), cv = $("#cv"), mini = $("#mini");
 const S = {book:null, parts:[], chapters:[], roles:[], rules:[], engine:{}, gotovo:{}, part:null, n:0, sel:null, ed:null,
            zoom:36, scrollT:0, peaks:null, jobs:[], stopAt:null, lastScroll:0, busy:false, notes:{}, free:false};
+const BT = {active:false,returnPart:0,chapter:0,offset:0,limit:50,query:"",confidence:"",role:"",rows:[],chapters:[],roles:[],selected:null,dirty:new Map(),loading:false};
 const ROLE_HUES = ["#B8792B","#8A4F7D","#4F6D8F","#7A7F2E","#9A5B43","#4E8087","#A06A8C","#A68A5B","#5E5F8E","#6C7F4A"];
 const STATE_NAME = {draft:"черновик", edited:"правка", stale:"переозвучить", empty:"нет записи", lost:"потерян дубль", locked:"закреплено"};
 const ICON = {
@@ -490,6 +522,7 @@ async function loadState(){
   drawEngine();
 }
 async function openPart(n){
+  if(BT.active && !(await leaveBookTextMode())) return;
   commitFree();
   if(S.ed && S.ed.dirty) await saveEd();
   const seq = S.openSeq = (S.openSeq || 0) + 1;
@@ -509,7 +542,8 @@ async function openPart(n){
 function segAt(t){ const a = S.part ? S.part.segs : []; let lo = 0, hi = a.length - 1, r = -1; while(lo <= hi){ const m = (lo+hi) >> 1; if(a[m].t0 <= t){ r = m; lo = m+1; } else hi = m-1; } return r; }
 function segOf(uid){ return S.part ? S.part.segs.find(s => s.uid === uid) : null; }
 function setPart(p, fresh=false){
-  if(!p || p.n !== S.n) return;                                // запоздавший ответ про другую часть — не наш
+  if(!p || p.n !== S.n) return;
+  if(BT.active){ S.part = p; return; }                                // запоздавший ответ про другую часть — не наш
   const old = S.part, t = au.currentTime || 0;
   let keep = null;
   if(old && !fresh){ const k = segAt(t); if(k >= 0) keep = {uid: old.segs[k].uid, off: t - old.segs[k].t0}; }
@@ -2612,6 +2646,7 @@ function keysDialog(){
   dialog('<h3>Клавиши</h3><table>' + rows.map(r => '<tr><td style="white-space:nowrap"><kbd>' + r[0] + '</kbd></td><td>' + r[1] + '</td></tr>').join("") + '</table>', [["Закрыть"]]);
 }
 $("#btnParts").onclick = $("#partBtn").onclick = async () => { try { await loadState(); } catch(e){} partsDialog(); };
+$("#btnTextBook").onclick = toggleBookTextMode;
 $("#btnRules").onclick = rulesDialog; $("#btnKeys").onclick = keysDialog; $("#btnHelp").onclick = helpDialog; $("#btnProj").onclick = projectDialog;
 $("#prevPart").onclick = () => { if(S.n > 1) openPart(S.n - 1); };
 $("#nextPart").onclick = () => { if(S.n < S.parts.length) openPart(S.n + 1); };
@@ -2701,22 +2736,217 @@ window.addEventListener("beforeunload", ev => {
   try { fetch("/api/bye", {method:"POST", keepalive:true, headers:hd, body:"{}"}); } catch(e){}
 });
 
+// ---------------------------------------------------------------- редактор текста книги в штатной оболочке Studio
+function btEscAttr(value){ return esc(String(value == null ? "" : value)); }
+function btQueryUrl(){
+  return "/api/book_text?ch=" + encodeURIComponent(BT.chapter)
+    + "&offset=" + encodeURIComponent(BT.offset)
+    + "&limit=" + encodeURIComponent(BT.limit)
+    + "&q=" + encodeURIComponent(BT.query)
+    + "&conf=" + encodeURIComponent(BT.confidence)
+    + "&role=" + encodeURIComponent(BT.role);
+}
+function btDirtyCount(){ return BT.dirty.size; }
+function btUpdateToolbar(){
+  const save=$("#btSavePage"), state=$("#btSaveState");
+  if(save){save.disabled=!btDirtyCount()||BT.loading;save.textContent=btDirtyCount()?"Сохранить правки ("+btDirtyCount()+")":"Нет несохранённых правок";}
+  if(state)state.textContent=btDirtyCount()?"Несохранённых: "+btDirtyCount():"Все изменения сохранены";
+  const button=$("#btnTextBook"); if(button)button.classList.toggle("pri",BT.active);
+}
+function btToolbarMarkup(){
+  const toolbar=$("#bookTextToolbar");
+  if(!toolbar)throw new Error("В штатной разметке нет #bookTextToolbar");
+  toolbar.innerHTML='<label for="btChapter">Глава</label><select id="btChapter"><option value="0">Вся книга</option></select>'
+    +'<input id="btSearch" type="search" placeholder="Найти фразу, имя или номер…" aria-label="Поиск по книге">'
+    +'<select id="btConfidence" aria-label="Уверенность"><option value="">Все уровни</option><option value="high">Высокая</option><option value="mid">Средняя</option><option value="low">Низкая</option><option value="none">Не определена</option></select>'
+    +'<select id="btRoleFilter" aria-label="Говорящий"><option value="">Все говорящие</option></select>'
+    +'<button id="btFind" type="button">Найти</button><button id="btSavePage" type="button" class="pri" disabled>Нет несохранённых правок</button>'
+    +'<span id="btSaveState" class="bt-meta"></span>';
+  $("#btFind").addEventListener("click",async()=>{
+    if(!(await btConfirmPending()))return;
+    BT.chapter=+$("#btChapter").value;BT.query=$("#btSearch").value.trim();
+    BT.confidence=$("#btConfidence").value;BT.role=$("#btRoleFilter").value;BT.offset=0;
+    await btLoadPage();
+  });
+  $("#btChapter").addEventListener("change",async()=>{
+    if(!(await btConfirmPending())){$("#btChapter").value=String(BT.chapter);return;}
+    BT.chapter=+$("#btChapter").value;BT.offset=0;await btLoadPage();
+  });
+  $("#btConfidence").addEventListener("change",async()=>{
+    if(!(await btConfirmPending())){$("#btConfidence").value=BT.confidence;return;}
+    BT.confidence=$("#btConfidence").value;BT.offset=0;await btLoadPage();
+  });
+  $("#btRoleFilter").addEventListener("change",async()=>{
+    if(!(await btConfirmPending())){$("#btRoleFilter").value=BT.role;return;}
+    BT.role=$("#btRoleFilter").value;BT.offset=0;await btLoadPage();
+  });
+  $("#btSearch").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();$("#btFind").click();}});
+  $("#btSavePage").addEventListener("click",saveBookTextChanges);
+}
+async function enterBookTextMode(){
+  if(BT.active)return btLoadPage();
+  if(S.ed&&S.ed.dirty)await saveEd();
+  BT.active=true;BT.returnPart=S.n||0;
+  au.pause();aux.pause();
+  document.body.classList.add("book-text-mode");
+  $("#bookTextToolbar").hidden=false;$("#load").hidden=true;
+  btToolbarMarkup();btUpdateToolbar();
+  await btLoadPage();
+}
+async function toggleBookTextMode(){
+  try{if(BT.active){await leaveBookTextMode();return;}await enterBookTextMode();}
+  catch(e){fail(e);}
+}
+async function btConfirmPending(){
+  if(!btDirtyCount())return true;
+  if(confirm("Есть несохранённые изменения текста/ролей. Сохранить их перед переходом?")){
+    await saveBookTextChanges();return btDirtyCount()===0;
+  }
+  return confirm("Отбросить несохранённые изменения и продолжить?");
+}
+async function leaveBookTextMode(){
+  if(!BT.active)return true;
+  if(!(await btConfirmPending()))return false;
+  BT.active=false;document.body.classList.remove("book-text-mode");
+  $("#bookTextToolbar").hidden=true;BT.selected=null;BT.rows=[];BT.dirty.clear();
+  if(!S.parts.length){
+    toast("Аудиочастей ещё нет. Редактор текста книги остаётся доступен.","",5000);
+    BT.active=true;document.body.classList.add("book-text-mode");$("#bookTextToolbar").hidden=false;
+    return false;
+  }
+  const n=BT.returnPart>=1&&BT.returnPart<=S.parts.length?BT.returnPart:(S.parts.find(p=>!p.locked)||S.parts[0]).n;
+  await openPart(n);return true;
+}
+async function btLoadPage(){
+  if(!BT.active)return;
+  BT.loading=true;btUpdateToolbar();
+  const sheet=$("#sheet"),insp=$("#insp");sheet.textContent="Загружаю фразы книги…";
+  try{
+    const d=await api(btQueryUrl());
+    BT.chapter=d.chapter;BT.offset=d.offset;BT.rows=d.rows;BT.chapters=d.chapters;BT.roles=d.roles;
+    const chapter=$("#btChapter");
+    if(chapter&&chapter.options.length===1){
+      chapter.innerHTML='<option value="0">Вся книга — '+d.total_rows+' строк</option>'
+        +d.chapters.map(c=>'<option value="'+c.ch+'">'+esc(c.title)+' — '+c.count+' строк</option>').join("");
+    }
+    chapter.value=String(d.chapter);$("#btSearch").value=BT.query;$("#btConfidence").value=BT.confidence;
+    const roleSelect=$("#btRoleFilter"),oldRole=BT.role;
+    roleSelect.innerHTML='<option value="">Все говорящие</option>'+d.roles.map(name=>'<option value="'+btEscAttr(name)+'">'+esc(name==="narrator"?"Рассказчик":name)+'</option>').join("");
+    roleSelect.value=oldRole;
+    sheet.innerHTML=d.rows.map(r=>{
+      const role=r.role||r.base_role||"narrator";
+      const state=BT.dirty.has(r.uid)?"Есть несохранённая правка":(r.tech_src==="manual"?"ручная правка":(r.tech_src==="rule"?"правило чтения":"исходный текст"));
+      const conf=({high:"высокая",mid:"средняя",low:"низкая",none:"не определена"})[r.conf]||r.conf;
+      const kind=r.kind==="head"?"Заголовок":(r.kind==="speech"?"Реплика":"Повествование");
+      const chapterLabel=d.chapter===0?'<span>'+esc(r.chapter_title)+' · </span>':"";
+      return '<article class="bt-row'+(r.kind==="head"?' bt-heading':'')+(BT.selected===r.uid?' selected':'')+'" data-bt-uid="'+btEscAttr(r.uid)+'" style="--c:'+roleColor(role)+'">'
+        +'<time>№ '+esc(r.id)+'</time><i class="bt-tab"></i><div><div class="bt-meta"><span class="bt-role">'+esc(roleName(role))+'</span>'+chapterLabel+'<span>'+kind+'</span><span>абзац '+esc(r.para)+'</span><span>'+esc(conf)+'</span></div>'
+        +'<div class="bt-text">'+esc(r.text)+'</div></div><span class="bt-state'+(BT.dirty.has(r.uid)?' dirty':'')+'">'+esc(state)+'</span></article>';
+    }).join("")||'<div class="bt-empty">По выбранным условиям фразы не найдены.</div>';
+    const first=d.result_count?d.offset+1:0,last=d.offset+d.rows.length;
+    sheet.innerHTML+='<div class="bt-pager"><button id="btPrev" type="button" '+(d.offset<=0?'disabled':'')+'>← Назад</button><span>'+(first?first+"–"+last:"0")+' / '+d.result_count+'</span><button id="btNext" type="button" '+(d.offset+d.rows.length>=d.result_count?'disabled':'')+'>Далее →</button></div>';
+    sheet.querySelectorAll("[data-bt-uid]").forEach(el=>el.addEventListener("click",()=>btSelect(el.dataset.btUid,true)));
+    const prev=$("#btPrev"),next=$("#btNext");
+    if(prev)prev.onclick=async()=>{if(!(await btConfirmPending()))return;BT.offset=Math.max(0,BT.offset-BT.limit);await btLoadPage();};
+    if(next)next.onclick=async()=>{if(!(await btConfirmPending()))return;BT.offset+=BT.limit;await btLoadPage();};
+    $("#btSaveState").textContent=d.title+" · "+d.total_rows+" сегментов · "+d.chapters.length+" глав · "+d.roles.length+" ролей";
+    const keep=BT.selected&&d.rows.find(x=>x.uid===BT.selected);
+    if(keep)btSelect(BT.selected,false);
+    else{
+      BT.selected=null;
+      insp.innerHTML='<h2>'+esc(d.manuscript_title||d.book)+'</h2><div class="meta">'+esc(d.title)+' · '+d.total_rows+' фраз</div>'
+        +'<p class="orig">Выберите фразу в левой панели. Исходный текст остаётся неизменным; правится только текст для озвучки и назначение говорящего. Изменения записываются в штатные правки Studio.</p>'
+        +'<label class="f">На что обратить внимание</label><p class="orig">Сначала проверьте фразы с низкой уверенностью и неопределённым говорящим. Фильтры находятся над текстом книги.</p>'
+        +'<div class="acts"><button id="btLow">Показать низкую уверенность</button><button id="btNone">Не определён говорящий</button></div>';
+      $("#btLow").onclick=()=>{BT.confidence="low";$("#btConfidence").value="low";BT.offset=0;btLoadPage();};
+      $("#btNone").onclick=()=>{BT.confidence="none";$("#btConfidence").value="none";BT.offset=0;btLoadPage();};
+    }
+  }finally{BT.loading=false;btUpdateToolbar();}
+}
+function btSelect(uid,scroll){
+  const row=BT.rows.find(x=>x.uid===uid);if(!row)return;
+  BT.selected=uid;$("#sheet").querySelectorAll(".bt-row").forEach(el=>el.classList.toggle("selected",el.dataset.btUid===uid));
+  const dirty=BT.dirty.get(uid),tech=dirty?dirty.tech:row.tech,role=dirty?dirty.role:row.role;
+  const options=BT.roles.map(name=>'<option value="'+btEscAttr(name)+'"'+(name===role?' selected':'')+'>'+esc(name==="narrator"?"Рассказчик":name)+'</option>').join("");
+  const insp=$("#insp");
+  insp.innerHTML='<h2>Фраза № '+esc(row.id)+'</h2><div class="meta">'+esc(row.chapter_title)+' · абзац '+esc(row.para)+' · '+esc(row.conf)+' уверенность</div>'
+    +'<label class="f">Исходный текст сегмента</label><div class="bt-source">'+esc(row.text)+'</div>'
+    +'<label class="f" for="btTech">Текст для озвучки</label><textarea id="btTech"'+(row.locked?' disabled':'')+'>'+esc(tech)+'</textarea>'
+    +'<label class="f" for="btRole">Говорящий</label><select id="btRole"'+(row.locked?' disabled':'')+'>'+options+'</select>'
+    +(row.locked?'<div class="bt-lock-note">Фраза закреплена. Снимите закрепление в аудиоредакторе, чтобы менять её текст или роль.</div>'
+      :'<div class="acts"><button id="btReset" type="button">Сбросить правки</button><button id="btSaveOne" type="button" class="pri">Сохранить фразу</button></div>')
+    +'<div class="bt-status" id="btStatus">'+(dirty?"Есть несохранённые изменения":"Правки сохраняются в штатное хранилище Studio")+'</div>';
+  const textarea=$("#btTech"),roleSelect=$("#btRole");
+  if(!row.locked){
+    const update=()=>{
+      const value={tech:textarea.value,role:roleSelect.value,savedTech:row.tech,savedRole:row.role};
+      if(value.tech===value.savedTech&&value.role===value.savedRole)BT.dirty.delete(uid);else BT.dirty.set(uid,value);
+      const item=$("#sheet").querySelector('[data-bt-uid="'+CSS.escape(uid)+'"] .bt-state');
+      if(item){item.textContent=BT.dirty.has(uid)?"Есть несохранённая правка":"исходный текст";item.classList.toggle("dirty",BT.dirty.has(uid));}
+      btUpdateToolbar();$("#btStatus").textContent=BT.dirty.has(uid)?"Есть несохранённые изменения":"Изменений нет";
+    };
+    textarea.addEventListener("input",update);roleSelect.addEventListener("change",update);
+    $("#btSaveOne").onclick=async()=>{if(BT.dirty.has(uid))await btSaveUid(uid);};
+    $("#btReset").onclick=async()=>{
+      if(!confirm("Сбросить ручную правку текста и говорящего этой фразы? Исходный сегмент не изменится."))return;
+      try{await api("/api/book_text_edit",{uid,reset:true});BT.dirty.delete(uid);await btLoadPage();}catch(e){fail(e);}
+    };
+  }
+  if(scroll){const el=$("#sheet").querySelector('[data-bt-uid="'+CSS.escape(uid)+'"]');if(el)el.scrollIntoView({block:"nearest"});}
+}
+async function btSaveUid(uid){
+  const change=BT.dirty.get(uid);if(!change)return;
+  if(!change.tech.trim()){toast("Текст для озвучки не должен быть пустым.","red");return;}
+  const payload={uid};
+  if(change.tech!==change.savedTech)payload.tech=change.tech;
+  if(change.role!==change.savedRole)payload.role=change.role;
+  try{
+    await api("/api/book_text_edit",payload);BT.dirty.delete(uid);
+    const row=BT.rows.find(x=>x.uid===uid);
+    if(row){row.tech=change.tech;row.role=change.role;row.tech_src="manual";}
+    if(BT.selected===uid)btSelect(uid,false);
+    const el=$("#sheet").querySelector('[data-bt-uid="'+CSS.escape(uid)+'"] .bt-state');
+    if(el){el.textContent="сохранено";el.classList.remove("dirty");}
+    btUpdateToolbar();
+  }catch(e){fail(e);throw e;}
+}
+async function saveBookTextChanges(){
+  const list=Array.from(BT.dirty.keys());if(!list.length)return;
+  const button=$("#btSavePage");if(button)button.disabled=true;
+  for(const uid of list){
+    try{await btSaveUid(uid);}
+    catch(e){toast("Сохранение остановлено на фразе "+uid+". Остальные правки сохранены в редакторе и не потеряны.","red",9000);break;}
+  }
+  btUpdateToolbar();
+}
+window.addEventListener("keydown",e=>{
+  if(!BT.active)return;
+  if((e.ctrlKey||e.metaKey)&&e.code==="KeyS"){e.preventDefault();e.stopImmediatePropagation();saveBookTextChanges();}
+  else if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault();e.stopImmediatePropagation();if(BT.selected&&BT.dirty.has(BT.selected))btSaveUid(BT.selected);}
+},true);
+window.addEventListener("beforeunload",e=>{
+  if(BT.active&&btDirtyCount()){e.preventDefault();e.returnValue="Есть несохранённые правки текста книги.";}
+});
+
 // ---------------------------------------------------------------- пуск
 (async function(){
   try { const t = localStorage.getItem("nox.theme"); if(t) document.documentElement.dataset.theme = t; const z = +localStorage.getItem("nox.zoom"); if(z) S.zoom = z; } catch(e){}
   drawPlay();
   try {
     await loadState();
-    if(!S.parts.length){ $("#load").innerHTML = "Собранных частей пока нет.<br>Студия открывается, когда конвейер озвучил и собрал хотя бы первую часть."; return; }
-    let n = 0; try { n = +localStorage.getItem("nox.part:" + S.book.root) || 0; } catch(e){}
-    if(!(n >= 1 && n <= S.parts.length)) n = (S.parts.find(p => !p.locked) || S.parts[0]).n;
-    await openPart(n);
+    if(!S.parts.length){
+      await enterBookTextMode();
+    } else {
+      let n = 0; try { n = +localStorage.getItem("nox.part:" + S.book.root) || 0; } catch(e){}
+      if(!(n >= 1 && n <= S.parts.length)) n = (S.parts.find(p => !p.locked) || S.parts[0]).n;
+      await openPart(n);
+    }
   } catch(e){ $("#load").textContent = e.message; return; }
   loop();
   try { const h = +localStorage.getItem("nox.jh"); if(h >= 120) document.documentElement.style.setProperty("--jh", h + "px"); if(localStorage.getItem("nox.journal") === "1") jOpen(true); } catch(e){}
   jLayout(); pollLog();
   setInterval(pollJobs, 1000);
-  setInterval(async () => { if(S.n && au.paused && !(S.ed && S.ed.dirty) && !S.free && $("#veil").hidden && document.activeElement.tagName !== "SELECT"){ try { if(S.posts) return; const a0 = S.act, n0 = S.n, p = await api("/api/part?n=" + n0);
+  setInterval(async () => { if(!BT.active && S.n && au.paused && !(S.ed && S.ed.dirty) && !S.free && $("#veil").hidden && document.activeElement.tagName !== "SELECT"){ try { if(S.posts) return; const a0 = S.act, n0 = S.n, p = await api("/api/part?n=" + n0);
           if(S.posts || a0 !== S.act || n0 !== S.n || !S.part) return;     // пока ждали ответа, сам автор что-то сделал — этот ответ уже не про то
           if(p.ver !== S.part.ver){ setPart(p); toast("Запись обновилась: конвейер переозвучил фразу в этой части.", "blue"); } } catch(e){} } }, 30000);
 })();

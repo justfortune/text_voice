@@ -502,6 +502,7 @@ class Studio:
         self.tcache = read_json(self.dir / "tech_cache.json", None) or {}
         self._tc_dirty, self._tc_at, self._acc = False, time.time(), (0.0, "acute")
         self.load_asm()
+        self.store = None  # initialized before load_rows() may attempt to re-anchor edits
         self.load_rows(force=True)
         self.load_store()
         self.auto_th, self._auto_t0, self._auto_rows0, self.ch_busy, self._auto_redone = None, None, 0, None, {}
@@ -2068,6 +2069,106 @@ class Studio:
             return None
         return dict(file=ex.get("file"), dur=ex.get("dur"), at=ex.get("at"), fresh=ex.get("ver") == ver,
                     exists=Path(ex.get("file", "")).exists(), disk=ex.get("disk"))
+
+    # Editable manuscript preparation before audio exists. Read-only: no part/WAV creation.
+    def book_text_view(self, chapter: int = 0, offset: int = 0, limit: int = 50,
+                       query: str = "", confidence: str = "", role_filter: str = "") -> dict:
+        self.load_rows()
+        chapters = [
+            dict(ch=int(ch), title=str(title), count=int(b - a + 1))
+            for ch, (a, b, title) in sorted(self.chapters.items())
+        ]
+        if not chapters:
+            raise Oops("в сегментации книги нет глав")
+        chapter_ids = {item["ch"] for item in chapters}
+        chapter = int(chapter or 0)
+        if chapter != 0 and chapter not in chapter_ids:
+            raise Oops("указанная глава отсутствует в сегментации книги")
+        offset = max(0, int(offset))
+        limit = min(max(1, int(limit)), 80)
+        confidence = str(confidence or "").strip().lower()
+        if confidence not in ("", "high", "mid", "low", "none"):
+            raise Oops("неизвестный фильтр уверенности")
+        query = str(query or "").strip().casefold()[:160]
+        role_filter = str(role_filter or "").strip()
+        if role_filter and role_filter not in self.roles["roles"]:
+            raise Oops("указанная роль отсутствует в roles.json")
+
+        if chapter == 0:
+            start, end, title = 0, len(self.rows) - 1, "Вся книга"
+        else:
+            start, end, title = self.chapters[chapter]
+
+        with self.lock:
+            candidates = []
+            effective = {}
+            for i in range(start, end + 1):
+                row = self.rows[i]
+                row_confidence = str(row.get("conf") or "none").lower()
+                if confidence and row_confidence != confidence:
+                    continue
+                eff = self.eff(i)
+                effective[i] = eff
+                role = str(eff.get("role") or "")
+                if role_filter and role != role_filter:
+                    continue
+                if query:
+                    haystack = " ".join((
+                        str(row.get("id", "")), str(row.get("speaker", "")), role,
+                        str(row.get("text", "")), str(eff.get("tech") or "")
+                    )).casefold()
+                    if query not in haystack:
+                        continue
+                candidates.append(i)
+
+            result_count = len(candidates)
+            if result_count:
+                offset = min(offset, ((result_count - 1) // limit) * limit)
+            else:
+                offset = 0
+            selected = candidates[offset:offset + limit]
+            result_rows = []
+            for i in selected:
+                row = self.rows[i]
+                eff = effective[i]
+                result_rows.append(dict(
+                    uid=str(self.uids[i]),
+                    id=str(row.get("id", "")),
+                    para=int(row.get("para") or 0),
+                    chapter=int(row.get("chapter") or 0),
+                    chapter_title=str(row.get("ch_title") or ""),
+                    kind=str(row.get("kind") or ""),
+                    role=str(eff.get("role") or ""),
+                    base_role=str(self.base_roles[i]),
+                    text=str(self.row_text(i) or ""),
+                    tech=str(eff.get("tech") or ""),
+                    tech_src=str(eff.get("tech_src") or "base"),
+                    conf=str(row.get("conf") or "none"),
+                    locked=bool(eff.get("locked")),
+                    index=i + 1,
+                ))
+
+        # Preserve case-sensitive role names ("голос" and "Голос" are distinct keys).
+        role_names = [str(name) for name in self.roles["roles"].keys()]
+        manuscript_title = str(self.rows[0].get("text") or self.title) if self.rows else self.title
+        return dict(
+            book=str(self.title),
+            manuscript_title=manuscript_title,
+            author=str(self.author),
+            chapter=chapter,
+            title=str(title),
+            offset=offset,
+            limit=limit,
+            chapter_count=end - start + 1,
+            result_count=result_count,
+            role_filter=role_filter,
+            rows=result_rows,
+            chapters=chapters,
+            roles=role_names,
+            total_rows=len(self.rows),
+            text_only=True,
+            editable=True,
+        )
 
     def state_view(self) -> dict:
         self.load_rows()
@@ -7345,6 +7446,11 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/ping":
             S.last_ping, S.bye_at = time.time(), None
             return self._json({"ok": True, "root": str(S.root), "ver": VERSION})
+        if p == "/api/book_text":
+            return self._json(S.book_text_view(
+                int(q.get("ch", 0)), int(q.get("offset", 0)), int(q.get("limit", 50)),
+                q.get("q", ""), q.get("conf", ""), q.get("role", "")
+            ))
         if p == "/api/state":
             return self._json(S.state_view())
         if p == "/api/part":
@@ -7482,6 +7588,33 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/bye":
             S.bye_at = time.time() + 8
             return self._json({"ok": True})
+        if p == "/api/book_text_edit":
+            uid = str(d.get("uid") or "")
+            if uid not in S.idx_of:
+                raise Oops("фраза не найдена в текущей редакции книги")
+            if d.get("reset"):
+                changes = {"tech": None, "role": None}
+            else:
+                changes = {}
+                if "tech" in d:
+                    tech = d.get("tech")
+                    if not isinstance(tech, str) or not tech.strip():
+                        raise Oops("текст для озвучки не должен быть пустым")
+                    if len(tech) > 6000:
+                        raise Oops("текст одной фразы слишком длинный (максимум 6000 знаков)")
+                    changes["tech"] = tech
+                if "role" in d:
+                    role = d.get("role")
+                    if not isinstance(role, str):
+                        raise Oops("роль должна быть строкой")
+                    role = role.strip()
+                    if role and role not in S.roles["roles"]:
+                        raise Oops("такой роли нет в roles.json")
+                    changes["role"] = role or None
+            if not changes:
+                raise Oops("нет изменений для сохранения")
+            S.set_seg(uid, changes)
+            return self._json({"ok": True, "uid": uid})
         if p == "/api/seg":
             S.set_seg(d["uid"], d.get("set") or {})
         elif p == "/api/synth":

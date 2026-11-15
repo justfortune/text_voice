@@ -71,6 +71,22 @@ class StudioFrontendTests(unittest.TestCase):
         self.assertIn("NotFoundError", self.html)
         self.assertIn("audioCtx.close()", self.html)
 
+    def test_pre_audio_book_editor_is_integrated_into_native_studio_layout(self):
+        self.assertIn('id="btnTextBook"', self.html)
+        self.assertIn('id="bookTextToolbar"', self.html)
+        self.assertIn('<main>\n  <div id="sheetWrap"', self.html)
+        self.assertIn('<aside id="insp"></aside>', self.html)
+        self.assertIn("body.book-text-mode", self.html)
+        self.assertIn('if(!S.parts.length){\n      await enterBookTextMode();', self.html)
+        self.assertNotIn("book-editor-wrap", self.html)
+        self.assertNotIn('host.classList.add("book-editor")', self.html)
+
+    def test_book_text_editor_saves_into_existing_studio_api(self):
+        self.assertIn('"/api/book_text_edit"', self.html)
+        self.assertIn('S.set_seg(uid, changes)', (ROOT / "kit" / "nox_studio.py").read_text(encoding="utf-8"))
+        self.assertIn('$("#sheet")', self.html)
+        self.assertIn('$("#insp")', self.html)
+
     def test_whole_book_dialog_distinguishes_missing_chapters_from_remaining_parts(self):
         self.assertIn("a.parts_done", self.html)
         self.assertIn("все части уже озвучены и закреплены", self.html)
