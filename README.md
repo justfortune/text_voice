@@ -94,6 +94,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\nox-audiobook\tools\ustan
 
 Репозиторий живёт в отдельной папке. В папке книги (`D:\kniga1a`) git не заводится.
 
+## Диагностика и карта локальной среды Nox
+
+Актуальные сведения о Runtime-окружениях, инвентаризации Python, состоянии MyBook и безопасной последовательности восстановления находятся в [аудите среды от 2026-11-15](docs/operations/local-runtime-audit-2026-11-15.md).
+
+Для повторного read-only сбора Python/Conda environments и установленных пакетов используйте [tools/nox_python_environment_inventory.ps1](tools/nox_python_environment_inventory.ps1). Скрипт совместим с Windows PowerShell 5.1; он не устанавливает и не удаляет пакеты и не меняет проекты. Его TXT/CSV/JSON отчёты могут содержать локальные пути и идентификаторы машины — не коммитьте их без предварительной очистки.
+
 ## Лицензия
 
 Не выбрана. Пока лицензии нет, все права на код остаются у автора.

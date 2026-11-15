@@ -7,6 +7,8 @@
 !/tools/
 !/base/
 !/data/
+!/docs/
+!/docs/**
 
 # Никогда — даже внутри разрешённых папок: рукопись, звук, проекты студии, таблицы, архивы, рабочие данные книги.
 *.docx
@@ -35,3 +37,12 @@ roles*.json
 edits*.json
 Сценарий_по_ролям*
 Исправления_ролей*
+
+
+# Local machine inventory output — do not commit raw reports
+**/Nox_Python_Inventory.txt
+**/Nox_Python_Inventory.json
+**/Nox_Python_Interpreters.csv
+**/Nox_Python_Packages.csv
+**/Nox_Runtime_Deep_Check.txt
+**/Nox_Environment_Audit.txt

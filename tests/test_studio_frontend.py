@@ -1,0 +1,116 @@
+# -*- coding: utf-8 -*-
+"""Frontend regression contracts and JavaScript syntax validation."""
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+HTML = ROOT / "kit" / "nox_studio.html"
+
+
+class StudioFrontendTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.html = HTML.read_text(encoding="utf-8")
+        scripts = re.findall(r"<script(?:\s[^>]*)?>([\s\S]*?)</script>", cls.html, re.I)
+        cls.scripts = [x for x in scripts if x.strip()]
+
+    def test_inline_javascript_parses(self):
+        node = shutil.which("node")
+        if not node:
+            raise unittest.SkipTest("Node.js не установлен; CI устанавливает его отдельно")
+        self.assertTrue(self.scripts, "в HTML не найден встроенный JavaScript")
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "studio.js"
+            path.write_text("\n".join(self.scripts), encoding="utf-8")
+            p = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+            self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+
+    def test_microphone_capture_uses_existing_take_pipeline(self):
+        for token in (
+            "navigator.mediaDevices.getUserMedia",
+            "new MediaRecorder",
+            "try { rec.start(500); }",
+            "Не удалось начать запись",
+            "micRelease(); closeDialog();",
+            "rec.stop()",
+            "micCancel()",
+            "await ownRecord(uid,file)",
+            r"const SND_RE = /\.(wav|webm|mp3",
+            'on("#ownMic", "click", () => recordOwn(s.uid))',
+        ):
+            self.assertIn(token, self.html)
+
+    def test_microphone_permission_request_cannot_be_started_concurrently(self):
+        self.assertIn('let MIC = null, MIC_REVIEW_URL = "", MIC_PENDING = false;', self.html)
+        self.assertIn("if(MIC || MIC_PENDING)", self.html)
+        self.assertIn("MIC_PENDING = true;\n  try {\n    stream = await navigator.mediaDevices.getUserMedia", self.html)
+        self.assertIn("MIC_PENDING = false;\n  const mime=", self.html)
+
+    def test_microphone_has_level_meter_and_preview_before_upload(self):
+        for token in (
+            "createMediaStreamSource(stream)",
+            "getByteTimeDomainData(data)",
+            'id="micMeter"',
+            'id="micLevel"',
+            "Прослушайте запись",
+            "micReviewClear()",
+            "Сохранить дубль",
+            "Перезаписать",
+        ):
+            self.assertIn(token, self.html)
+        self.assertLess(self.html.index("Прослушайте запись"), self.html.index("await ownRecord(uid,file)"))
+
+    def test_microphone_dialog_has_bounded_duration_and_cancel_path(self):
+        self.assertIn("sec>=180", self.html)
+        self.assertIn("Запись микрофона отменена", self.html)
+        self.assertIn("NotAllowedError", self.html)
+        self.assertIn("NotFoundError", self.html)
+        self.assertIn("audioCtx.close()", self.html)
+
+    def test_pre_audio_book_editor_preserves_the_native_studio_shell(self):
+        self.assertIn('id="btnTextBook"', self.html)
+        self.assertIn('id="bookTextToolbar"', self.html)
+        self.assertIn('id="btNoAudio"', self.html)
+        self.assertIn('<main>\n  <div id="sheetWrap"', self.html)
+        self.assertIn('<aside id="insp"></aside>', self.html)
+        self.assertIn('id="transport"', self.html)
+        self.assertIn('id="tl"', self.html)
+        self.assertIn('class="partnav"', self.html)
+        self.assertIn("body.book-text-mode", self.html)
+        self.assertNotIn("body.book-text-mode #transport", self.html)
+        self.assertNotIn("body.book-text-mode #tl", self.html)
+        self.assertNotIn("body.book-text-mode .partnav", self.html)
+        self.assertNotIn("body.book-text-mode{grid-template-rows", self.html)
+        self.assertIn('document.body.classList.toggle("book-no-audio", !S.part);', self.html)
+        self.assertIn('$("#partBtn").textContent = "Рукопись";', self.html)
+        self.assertIn('if(!S.parts.length){\n      await enterBookTextMode();', self.html)
+        self.assertNotIn("book-editor-wrap", self.html)
+        self.assertNotIn('host.classList.add("book-editor")', self.html)
+
+    def test_book_text_editor_saves_into_existing_studio_api(self):
+        self.assertIn('"/api/book_text_edit"', self.html)
+        self.assertIn('S.set_seg(uid, changes)', (ROOT / "kit" / "nox_studio.py").read_text(encoding="utf-8"))
+        self.assertIn('$("#sheet")', self.html)
+        self.assertIn('$("#insp")', self.html)
+
+    def test_boundary_editor_requires_pause_during_whole_book_automation(self):
+        self.assertIn('const autoRunning = (S.auto || {}).state === "run";', self.html)
+        self.assertIn("Сначала нажмите «Пауза»", self.html)
+        self.assertIn('if((S.auto || {}).state === "run"){ toast("Сначала поставьте «Вся книга» на паузу.', self.html)
+
+    def test_whole_book_dialog_distinguishes_missing_chapters_from_remaining_parts(self):
+        self.assertIn("a.parts_done", self.html)
+        self.assertIn("все части уже озвучены и закреплены", self.html)
+        self.assertIn("все файлы глав собраны и актуальны", self.html)
+
+    def test_paragraph_recording_is_not_exposed_until_transactional_backend_exists(self):
+        self.assertNotIn('recordOwn(s.uid, "para")', self.html)
+        self.assertNotIn("ownParagraphRecord(", self.html)
+
+
+if __name__ == "__main__":
+    unittest.main()

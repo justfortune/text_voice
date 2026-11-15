@@ -28,6 +28,7 @@ import csv
 import bisect
 import collections
 import concurrent.futures
+import copy
 import hashlib
 import hmac
 import json
@@ -85,7 +86,7 @@ def norm_t(t) -> str:
 
 
 SND_SR = 24000
-SND_EXT = (".wav", ".mp3", ".ogg", ".oga", ".flac", ".m4a", ".aac", ".opus", ".wma", ".aif", ".aiff")
+SND_EXT = (".wav", ".webm", ".mp3", ".ogg", ".oga", ".flac", ".m4a", ".aac", ".opus", ".wma", ".aif", ".aiff")
 CUE_KINDS = ("sfx", "amb", "mus")
 CUE_NAME = {"sfx": "звук", "amb": "фон", "mus": "музыка"}
 # Правки автора в звуке, пришедшем из партитуры книги: что именно он менял (остальное при обновлении партитуры берётся из неё)
@@ -236,9 +237,11 @@ def write_atomic(path: Path, data):
     """Запись через временный файл: при сбое на диске остаётся прежняя версия. Антивирус может держать файл — 5 попыток."""
     tmp = path.with_name(path.name + ".tmp")
     b = data.encode("utf-8") if isinstance(data, str) else data
+    created_tmp = False
     for k in range(5):
         try:
             with open(tmp, "wb") as f:
+                created_tmp = True
                 f.write(b)
                 f.flush()
                 try:
@@ -249,6 +252,13 @@ def write_atomic(path: Path, data):
             return
         except OSError:
             if k == 4:
+                # Не оставляем собственный незавершённый файл после окончательного сбоя.
+                # Старый целевой файл не трогаем; ошибку очистки не подменяем исходной.
+                if created_tmp:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 raise
             time.sleep(0.2 * (k + 1))
 
@@ -269,20 +279,32 @@ def safe_file(name: str) -> str:
 
 
 def pid_alive(pid: int) -> bool:
-    """Жив ли процесс. В Windows os.kill(pid, 0) процесс УБИВАЕТ — поэтому через OpenProcess."""
+    """Проверяет PID без сигналов. Ошибка доступа/проверки означает «считаем живым» (fail-closed)."""
     if pid <= 0:
         return False
     if os.name == "nt":
         try:
             import ctypes
-            k = ctypes.windll.kernel32
-            h = k.OpenProcess(0x1000, False, int(pid))              # PROCESS_QUERY_LIMITED_INFORMATION
-            if not h:
-                return False
-            code = ctypes.c_ulong()
-            ok = k.GetExitCodeProcess(h, ctypes.byref(code))
-            k.CloseHandle(h)
-            return bool(ok) and code.value == 259                   # STILL_ACTIVE
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                # Только ERROR_INVALID_PARAMETER (87) доказывает, что PID отсутствует.
+                # ACCESS_DENIED и прочие ошибки не дают права объявлять процесс мёртвым.
+                return ctypes.get_last_error() != 87
+            try:
+                code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return True
+                return code.value == 259  # STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
         except Exception:
             return True
     try:
@@ -453,6 +475,7 @@ class Studio:
         self._cstat = (0.0, None)                # размер кэша студии (считается не чаще раза в две минуты)
         self._seen = {}                          # часть -> когда её открывали в окне (её предпросмотр не убирать)
         self._clock = (0.0, {})
+        self._clock_sig = None
         self._wseen = set()
         self.check = None                        # итог самопроверки
         self.engine2, self.e2_busy, self.e2_tried, self.e1_at = None, 0.0, 0.0, 0.0
@@ -479,6 +502,7 @@ class Studio:
         self.tcache = read_json(self.dir / "tech_cache.json", None) or {}
         self._tc_dirty, self._tc_at, self._acc = False, time.time(), (0.0, "acute")
         self.load_asm()
+        self.store = None  # initialized before load_rows() may attempt to re-anchor edits
         self.load_rows(force=True)
         self.load_store()
         self.auto_th, self._auto_t0, self._auto_rows0, self.ch_busy, self._auto_redone = None, None, 0, None, {}
@@ -510,7 +534,7 @@ class Studio:
                    n.EQ_MAX, n.SENT_GAP_ON, getattr(n, "NOX_STAGE", 0)])
 
     # ------------------------------------------------------------------ книга: реплики, роли, привязка
-    def load_rows(self, force=False) -> bool:
+    def load_rows(self, force=False, strict=False) -> bool:
         try:
             a, b = n.CSV_PATH.stat(), n.ROLES_PATH.stat()
             sig = (a.st_size, a.st_mtime_ns, b.st_size, b.st_mtime_ns)
@@ -524,8 +548,8 @@ class Studio:
             if not rows or any(k not in rows[0] for k in need) or any(r.get("text") is None for r in rows):
                 raise ValueError("в таблице реплик не хватает столбцов или строка оборвана")
         except Exception as e:                     # конвейер прямо сейчас переписывает файлы — живём на прежних
-            if getattr(self, "rows", None) is None:
-                raise Oops(f"не читается разбивка книги (work\\segments.csv): {type(e).__name__}: {e}")
+            if strict or getattr(self, "rows", None) is None:
+                raise Oops(f"не читается разбивка книги (work\\segments.csv): {type(e).__name__}: {e}") from e
             return False
         keys, uids, seen = [], [], {}
         for r in rows:
@@ -539,27 +563,45 @@ class Studio:
         if ins:                                        # фразы, вставленные автором в студии, — на свои места
             rows, keys, uids, pidx = self.splice_ins(rows, keys, uids, ins, roles)
         with self.lock:
-            self.rows, self.roles, self.keys, self.uids = rows, roles, keys, uids
-            self.pidx = pidx                           # номер реплики у конвейера (None — вставка студии)
-            self.sidx = [i for i, q in enumerate(pidx) if q is not None]      # реплика конвейера -> место в ряду студии
-            self.idx_of = {u: i for i, u in enumerate(uids)}
-            self.id2i = {r["id"]: i for i, r in enumerate(rows)}
-            self._spans = {}
-            self._clock = (0.0, {})
-            self.stems = n.voice_stems(roles)
-            self.base_roles = [self._role_of(r, roles) for r in rows]
-            self.role_cnt = collections.Counter(self.base_roles)
-            self.wavs = [n.wav_for(r, roles) if not r.get("ins") else self.takes_dir / "_ins" / (r["ins"] + ".wav") for r in rows]
-            ch = {}
-            for i, r in enumerate(rows):
-                c = int(r["chapter"])
-                if c not in ch:
-                    ch[c] = [i, i, r["ch_title"]]
-                ch[c][1] = i
-            self.chapters = ch
-            self.rows_sig, self.rows_at = sig, time.time()
-            if getattr(self, "store", None) is not None:
-                self.reanchor()
+            row_attrs = ("rows", "roles", "keys", "uids", "pidx", "sidx", "idx_of", "id2i", "_spans",
+                         "_clock", "_clock_sig", "stems", "base_roles", "role_cnt", "wavs", "chapters", "rows_sig", "rows_at", "_abs")
+            missing = object()
+            previous_rows = {key: getattr(self, key, missing) for key in row_attrs}
+            previous_store = self.store
+            previous_store_data = json.loads(jd(previous_store)) if strict and previous_store is not None else None
+            try:
+                self.rows, self.roles, self.keys, self.uids = rows, roles, keys, uids
+                self.pidx = pidx                           # номер реплики конвейера (None — вставка студии)
+                self.sidx = [i for i, q in enumerate(pidx) if q is not None]      # реплика конвейера -> место в ряду студии
+                self.idx_of = {u: i for i, u in enumerate(uids)}
+                self.id2i = {r["id"]: i for i, r in enumerate(rows)}
+                self._spans = {}
+                self._clock = (0.0, {})
+                self._clock_sig = None
+                self.stems = n.voice_stems(roles)
+                self.base_roles = [self._role_of(r, roles) for r in rows]
+                self.role_cnt = collections.Counter(self.base_roles)
+                self.wavs = [n.wav_for(r, roles) if not r.get("ins") else self.takes_dir / "_ins" / (r["ins"] + ".wav") for r in rows]
+                ch = {}
+                for i, r in enumerate(rows):
+                    c = int(r["chapter"])
+                    if c not in ch:
+                        ch[c] = [i, i, r["ch_title"]]
+                    ch[c][1] = i
+                self.chapters = ch
+                self.rows_sig, self.rows_at = sig, time.time()
+                if getattr(self, "store", None) is not None:
+                    self.reanchor(persist=not strict)
+            except Exception:
+                if strict:
+                    if previous_store_data is not None:
+                        self.store = previous_store_data
+                    for key, value in previous_rows.items():
+                        if value is missing:
+                            self.__dict__.pop(key, None)
+                        else:
+                            setattr(self, key, value)
+                raise
         return True
 
     @staticmethod
@@ -869,7 +911,7 @@ class Studio:
         return not any(e.get(k) not in (None, "", False, []) for k in ("role", "tech", "tempo", "pause", "take", "locked",
                                                                         "mark", "ack", "after", "join", "into"))
 
-    def reanchor(self):
+    def reanchor(self, persist=True):
         """Правки ищут свои фразы заново (после переразбивки книги): тот же текст и хотя бы один прежний сосед.
         Фраза исчезла из книги — правка уходит в «без места» (не удаляется)."""
         by_key = {}
@@ -913,10 +955,12 @@ class Studio:
         if dropped:
             log(f"соединённые фразы: снято соединений — {dropped} (книга переразбита или между фразами встала вставка); "
                 "фразы вернулись к виду до соединения", "warn")
-            self.save("соединения фраз сняты: цепочка разошлась", {"count": dropped})
+            if persist:
+                self.save("соединения фраз сняты: цепочка разошлась", {"count": dropped})
         if moved or lost:
             log(f"привязка правок: переехало {moved}, без места {lost}")
-            self.save("привязка правок после переразбивки", {"moved": moved, "lost": lost})
+            if persist:
+                self.save("привязка правок после переразбивки", {"moved": moved, "lost": lost})
 
     # ------------------------------------------------------------------ соединённые фразы
     # Автор соединяет фразу со следующей: дальше это одна фраза — в списке, в звуке, при переозвучке. В книге конвейера обе
@@ -1039,12 +1083,23 @@ class Studio:
         dst = self.take_path(e["sid"], tid)
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_name(dst.stem + ".tmp.wav")
-        sf.write(str(tmp), x, sra, subtype="PCM_16")
-        os.replace(tmp, dst)
-        write_atomic(dst.with_suffix(".json"), jd(dict(
-            tid=tid, src="glue", created=now(), role=role, tech=tech, raw=self.row_text(i), basis="tech",
-            dur=round(len(x) / sra, 3), why=[], cut=round(len(xa) / sra, 3), cover=list(e.get("join") or []),
-            **({"vsig": vsig} if vsig else {}))))
+        meta = dst.with_suffix(".json")
+        try:
+            sf.write(str(tmp), x, sra, subtype="PCM_16")
+            os.replace(tmp, dst)
+            write_atomic(meta, jd(dict(
+                tid=tid, src="glue", created=now(), role=role, tech=tech, raw=self.row_text(i), basis="tech",
+                dur=round(len(x) / sra, 3), why=[], cut=round(len(xa) / sra, 3), cover=list(e.get("join") or []),
+                **({"vsig": vsig} if vsig else {}))))
+        except Exception:
+            # _glue owns this fresh ID; do not leave a WAV without its metadata if
+            # the second half of the artifact transaction fails.
+            for artifact in (tmp, dst, meta):
+                try:
+                    artifact.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
         self._takes.pop(e["sid"], None)
         return tid
 
@@ -1073,53 +1128,69 @@ class Studio:
             ub = self.uids[j]
             if (self.store["segs"].get(ub) or {}).get("join"):
                 raise Oops(f"следующая фраза (№ {rb['id']}) сама соединена с соседней — сначала разъедините её")
-            ea, eb = self.E(uid, create=True), self.E(ub, create=True)
-            if ea.get("locked") or eb.get("locked"):
-                raise Oops("фраза закреплена — сначала снимите закрепление")
             if any(q["uid"] in (uid, ub) and q["status"] in ("queued", "running") for q in self.jobs.values()):
                 raise Oops("одна из этих фраз сейчас озвучивается — дождитесь дубля")
-            efa, efb, sca, scb = self.eff(i), self.eff(j), self.src(i), self.src(j)
-            if sca.get("imp") or scb.get("imp"):
-                raise Oops("у одной из фраз звучит ваша собственная запись — такие фразы не соединяются: "
-                           "поставьте ей дубль движка или дайте одну свою запись на обе фразы (U, затем «дальше по этой записи»)")
-            if efa["role"] != efb["role"] and not force:
-                who = lambda r: "Рассказчик" if r == "narrator" else r
-                raise Oops(f"у фраз разные голоса ({who(efa['role'])} и {who(efb['role'])}) — соединённую фразу целиком прочтёт {who(efa['role'])}")
-            snap = jd({"a": uid, "ea": ea, "b": ub, "eb": eb})
-            was_a, was_b = json.loads(jd(ea)), json.loads(jd(eb))
-            tech_new = norm_t(efa["tech"].strip() + " " + efb["tech"].strip())
-            spoken = None
-            if sca["path"] is not None and scb["path"] is not None:
-                spoken = norm_t((sca["tech"] or efa["tech"]).strip() + " " + (scb["tech"] or efb["tech"]).strip())
-            ea.setdefault("jwas", []).append({q: ea.get(q) for q in ("tech", "take", "after")})
-            ea.setdefault("join", []).append(ub)
-            eb["into"] = uid
-            if eb.get("after"):
-                ea["after"] = eb["after"]                  # пауза после соединённой фразы — та, что была после второй
-            else:
-                ea.pop("after", None)
-            self.joins_refresh()
-            if norm_t(self.auto_tech(i)[0]) == tech_new:
-                ea.pop("tech", None)
-            else:
-                ea["tech"] = tech_new
+            # E(create=True), joins_refresh и _glue могут менять несколько связанных структур.
+            # Снимок делается до первого такого изменения, а rollback восстанавливает их напрямую.
+            segs_before = json.loads(jd(self.store["segs"]))
+            abs_before = dict(self._abs)
+            undo_before = list(self.undo)
+            takes_before = dict(self._takes)
             tid = None
+            glue_sid = None
             try:
+                ea, eb = self.E(uid, create=True), self.E(ub, create=True)
+                glue_sid = ea["sid"]
+                if ea.get("locked") or eb.get("locked"):
+                    raise Oops("фраза закреплена — сначала снимите закрепление")
+                efa, efb, sca, scb = self.eff(i), self.eff(j), self.src(i), self.src(j)
+                if sca.get("imp") or scb.get("imp"):
+                    raise Oops("у одной из фраз звучит ваша собственная запись — такие фразы не соединяются: "
+                               "поставьте ей дубль движка или дайте одну свою запись на обе фразы (U, затем «дальше по этой записи»)")
+                if efa["role"] != efb["role"] and not force:
+                    who = lambda r: "Рассказчик" if r == "narrator" else r
+                    raise Oops(f"у фраз разные голоса ({who(efa['role'])} и {who(efb['role'])}) — соединённую фразу целиком прочтёт {who(efa['role'])}")
+                was_a, was_b = json.loads(jd(ea)), json.loads(jd(eb))
+                tech_new = norm_t(efa["tech"].strip() + " " + efb["tech"].strip())
+                spoken = None
+                if sca["path"] is not None and scb["path"] is not None:
+                    spoken = norm_t((sca["tech"] or efa["tech"]).strip() + " " + (scb["tech"] or efb["tech"]).strip())
+                ea.setdefault("jwas", []).append({q: ea.get(q) for q in ("tech", "take", "after")})
+                ea.setdefault("join", []).append(ub)
+                eb["into"] = uid
+                if eb.get("after"):
+                    ea["after"] = eb["after"]
+                else:
+                    ea.pop("after", None)
+                self.joins_refresh()
+                if norm_t(self.auto_tech(i)[0]) == tech_new:
+                    ea.pop("tech", None)
+                else:
+                    ea["tech"] = tech_new
                 if spoken is not None:
                     vs = ""
                     if efa["role"] == efb["role"] and not self.voice_stale(efa, sca, was_a) and not self.voice_stale(efb, scb, was_b):
-                        vs = self.vsig_now(efa["role"])     # обе записи — нынешним голосом роли
+                        vs = self.vsig_now(efa["role"])
                     tid = self._glue(i, ea, sca, scb, efa["role"], spoken, "" if vs == "nov" else vs)
                     ea["take"] = tid
+                self.undo.append(("#join", jd({"a": uid, "ea": was_a, "b": ub, "eb": was_b}), "соединение фраз"))
+                del self.undo[:-80]
+                self.save("фразы соединены", {"uid": uid, "id": ra["id"], "with": rb["id"], "take": tid})
+                return dict(uid=uid, take=tid, count=len(ea["join"]) + 1, long=len(tech_new) > 420)
             except Exception:
-                d = json.loads(snap)                       # склейка не вышла — всё как было
-                self.store["segs"][uid], self.store["segs"][ub] = d["ea"], d["eb"]
-                self.joins_refresh()
+                self.store["segs"] = segs_before
+                self._abs = abs_before
+                self.undo = undo_before
+                self._takes = takes_before
+                # Удаляем исключительно новый артефакт, созданный этой операцией.
+                if tid:
+                    try:
+                        glued = self.take_path(glue_sid, tid)
+                        glued.unlink(missing_ok=True)
+                        glued.with_suffix(".json").unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 raise
-            self.undo.append(("#join", snap, "соединение фраз"))
-            del self.undo[:-80]
-            self.save("фразы соединены", {"uid": uid, "id": ra["id"], "with": rb["id"], "take": tid})
-            return dict(uid=uid, take=tid, count=len(ea["join"]) + 1, long=len(tech_new) > 420)
 
     def join_split(self, uid: str) -> dict:
         """Разъединить: последняя присоединённая фраза снова сама по себе, со своей записью и правками; головная
@@ -1140,27 +1211,39 @@ class Studio:
             if any(q["uid"] == uid and q["status"] in ("queued", "running") for q in self.jobs.values()):
                 raise Oops("фраза сейчас озвучивается — дождитесь дубля")
             ub = js[-1]
-            eb = self.store["segs"].get(ub) or {}
-            snap = jd({"a": uid, "ea": ea, "b": ub, "eb": eb})
-            was = (ea.get("jwas") or [{}])[-1]
-            ea["join"], ea["jwas"] = js[:-1], list(ea.get("jwas") or [])[:-1]
-            if not ea["join"]:
-                ea.pop("join")
-                ea.pop("jwas", None)
-            eb.pop("into", None)
-            tail_after = ea.get("after")                   # пауза после соединённой фразы стоит после её последних слов —
-            self._join_restore(ea, was)
-            if tail_after:                                 # значит, при разъединении она остаётся у отделённой фразы
-                eb["after"] = tail_after
-            else:
-                eb.pop("after", None)
-            self.joins_refresh()
-            self.undo.append(("#join", snap, "разъединение фраз"))
-            del self.undo[:-80]
-            self._tidy(uid)
-            self._tidy(ub)
-            self.save("фразы разъединены", {"uid": uid, "id": self.rows[i]["id"], "freed": self.rows[self.idx_of[ub]]["id"] if ub in self.idx_of else "?"})
-            return dict(uid=uid, freed=ub, count=len(ea.get("join") or []) + 1)
+            # joins_refresh, tidy и save могут затронуть не только пару UID.
+            segs_before = json.loads(jd(self.store["segs"]))
+            abs_before = dict(self._abs)
+            undo_before = list(self.undo)
+            try:
+                ea = self.store["segs"].get(uid) or {}
+                eb = self.store["segs"].get(ub) or {}
+                was = (ea.get("jwas") or [{}])[-1]
+                ea["join"], ea["jwas"] = js[:-1], list(ea.get("jwas") or [])[:-1]
+                if not ea["join"]:
+                    ea.pop("join")
+                    ea.pop("jwas", None)
+                eb.pop("into", None)
+                tail_after = ea.get("after")
+                self._join_restore(ea, was)
+                if tail_after:
+                    eb["after"] = tail_after
+                else:
+                    eb.pop("after", None)
+                self.joins_refresh()
+                self.undo.append(("#join", jd({"a": uid, "ea": segs_before[uid],
+                                                "b": ub, "eb": segs_before.get(ub, {})}), "разъединение фраз"))
+                del self.undo[:-80]
+                self._tidy(uid)
+                self._tidy(ub)
+                self.save("фразы разъединены", {"uid": uid, "id": self.rows[i]["id"],
+                                                "freed": self.rows[self.idx_of[ub]]["id"] if ub in self.idx_of else "?"})
+                return dict(uid=uid, freed=ub, count=len(ea.get("join") or []) + 1)
+            except Exception:
+                self.store["segs"] = segs_before
+                self._abs = abs_before
+                self.undo = undo_before
+                raise
 
     # ------------------------------------------------------------------ технический текст и правила
     def sidecar(self, p: Path):
@@ -1441,13 +1524,30 @@ class Studio:
         частей: так часть находится точно, даже когда её последняя фраза («— Да.») встречается в книге много раз
         (у одинаковых фраз одной роли запись общая, по записи их не различить). Карты нет — по записям начала и конца."""
         out, idx = [], read_json(n.PARTS_INDEX, []) or []
+
+        def valid_entry(entry):
+            # Current build_parts() writes stable row-ID and WAV-boundary fields, not the
+            # historical "sig" marker. Accept both formats; reject incomplete records.
+            return (isinstance(entry, dict) and bool(entry.get("start")) and bool(entry.get("end"))
+                    and (bool(entry.get("sig")) or
+                         (entry.get("start_id") is not None and entry.get("end_id") is not None)))
+
         for q, p in enumerate(idx):
-            if not p.get("sig"):
+            if not valid_entry(p):
                 break
             a = start if not out else out[-1][1] + 1
             if a >= len(self.rows):
                 break
             span = self._part_span(p.get("n", q + 1))
+            if span is not None:
+                ia, ib = span
+                # Карта времени могла остаться от другой редакции/переразбивки книги.
+                # UID обычно защищает от этого, но проверяем и реальные hash-WAV границы
+                # из parts.json: не переносим старый диапазон на чужие строки с теми же позициями.
+                if (not (0 <= ia <= ib < len(self.wavs))
+                        or self.wavs[ia].stem != p.get("start")
+                        or self.wavs[ib].stem != p.get("end")):
+                    span = None
             if span is not None:
                 ia, ib = span
                 if ib < a:
@@ -1460,7 +1560,7 @@ class Studio:
                 if out:
                     break
                 continue                                   # часть до нашей границы — пропускаем
-            nxt = idx[q + 1].get("start") if q + 1 < len(idx) and idx[q + 1].get("sig") else None
+            nxt = (idx[q + 1].get("start") if q + 1 < len(idx) and valid_entry(idx[q + 1]) else None)
             cand = [j for j in range(a, min(a + 4000, len(self.rows))) if self.wavs[j].stem == p.get("end")]
             b = next((j for j in cand if nxt is not None and j + 1 < len(self.rows) and self.wavs[j + 1].stem == nxt),
                      cand[0] if cand else None)
@@ -1480,7 +1580,9 @@ class Studio:
             acc += int(r["pause_before_ms"]) / 1000 + n.duration_of(p, cache)
             nxt = self.rows[i + 1] if i + 1 < len(self.rows) else None
             ok = nxt is None or nxt["kind"] == "head" or int(nxt["pause_before_ms"]) >= n.PAUSE["para"]
-            if (acc >= self.part_min * 60 * max(n.TEMPO_G, 1.0) and ok) or nxt is None:
+            # Считаем целевую длительность по той же конечной скорости, что и экспорт (_encode).
+            # Общий TEMPO_G меняет темп отдельных голосов, но не является скоростью файла целиком.
+            if (acc >= n.part_source_seconds(self.part_min, self.speed) and ok) or nxt is None:
                 out.append((a, i))
                 a, acc = i + 1, 0.0
         return out
@@ -1611,7 +1713,7 @@ class Studio:
         ex["kv"] = 2
         write_atomic(self.dir / "edits.json", json.dumps(self.store, ensure_ascii=False, indent=1))
 
-    def proc(self, i: int, eq: dict, ef: dict, sc: dict, key: str):
+    def proc(self, i: int, eq: dict, ef: dict, sc: dict, key: str, row_snapshot=None, roles_snapshot=None):
         """Запись фразы -> звук для части. Шаги и порядок — как в assemble() конвейера (сверено на этапе STAGE_OK)."""
         cp = self.cache_dir / f"{key}.npy"
         if cp.exists():
@@ -1625,8 +1727,11 @@ class Studio:
                 return x
             except Exception:
                 cp.unlink(missing_ok=True)
-        r = self.rows[i]
-        rc = self.roles["roles"].get(ef["role"], {})
+        # A render can outlive a book reload. Use the row/voice configuration captured by timeline(),
+        # never resolve the old row index against the newly loaded edition.
+        r = row_snapshot if row_snapshot is not None else self.rows[i]
+        role_data = roles_snapshot if roles_snapshot is not None else self.roles
+        rc = role_data["roles"].get(ef["role"], {})
         x, sr = self.read_audio(sc["path"])
         tr = sc.get("trim")
         if tr:                                             # обрезка дубля: исходная запись цела, берётся её отрезок
@@ -1644,9 +1749,15 @@ class Studio:
             if abs(gain - 1.0) > 0.01:
                 x = np.clip(x * gain, -1.0, 1.0)
             x = np.asarray(n._edges(x, sr), dtype="float32")
-            tmp = self.cache_dir / f"{key}.tmp.npy"
-            np.save(tmp, x)
-            os.replace(tmp, cp)
+            tmp = self.cache_dir / f"{key}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp.npy"
+            try:
+                np.save(tmp, x)
+                os.replace(tmp, cp)
+            finally:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return x
         # Счёт букв и поиск пауз — по тому же тексту, что у конвейера (исходная фраза): копия черновой записи и дубль
         # с поправленным ударением обрабатываются точно как черновик. Только если в дубле другие СЛОВА — по прочитанному.
@@ -1676,9 +1787,15 @@ class Studio:
         if abs(gain - 1.0) > 0.01:
             x = np.clip(x * gain, -1.0, 1.0)
         x = np.asarray(n._edges(x, sr), dtype="float32")
-        tmp = self.cache_dir / f"{key}.tmp.npy"
-        np.save(tmp, x)
-        os.replace(tmp, cp)
+        tmp = self.cache_dir / f"{key}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp.npy"
+        try:
+            np.save(tmp, x)
+            os.replace(tmp, cp)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
         return x
 
     def eq_for(self, i: int) -> dict:
@@ -1693,7 +1810,7 @@ class Studio:
             self.save(f"часть {k}: опорный темп ролей", {"part": k, "roles": len(rec["eq"])})
         return rec["eq"]
 
-    def _proc_many(self, items: list, op=None) -> dict:
+    def _proc_many(self, items: list, op=None, row_snapshots=None, roles_snapshot=None) -> dict:
         """Обработка фраз отрезка -> {ключ: звук}. Готовое берётся из кэша, остальное считается в несколько потоков:
         растяжка идёт через ffmpeg (отдельный процесс на фразу), а ядер у компьютера много. Фразы с общей записью
         (одинаковые реплики одной роли лежат одним файлом) идут друг за другом в одном потоке — у них общий файл
@@ -1701,7 +1818,8 @@ class Studio:
         todo, groups = {}, {}
         for i, ef, sc, eq, key, pause in items:
             if key != "none" and key not in todo:
-                todo[key] = (i, eq, ef, sc, key)
+                row_snapshot = (row_snapshots or {}).get(i)
+                todo[key] = (i, eq, ef, sc, key, row_snapshot, roles_snapshot)
                 groups.setdefault(sc.get("stem0") or sc["path"].stem, []).append(key)
         hit = sum(1 for key in todo if (self.cache_dir / f"{key}.npy").exists())
         if op is not None:
@@ -1735,21 +1853,42 @@ class Studio:
             for i in range(a, b + 1):
                 if i in self._abs:                             # присоединённая фраза звучит внутри головной
                     continue
-                ef, sc = self.eff(i, ridx), self.src(i)
-                eq = self.eq_for(i)
+                ef = copy.deepcopy(self.eff(i, ridx))
+                sc = copy.deepcopy(self.src(i))
+                eq = copy.deepcopy(self.eq_for(i))
                 key = (keyfn or self.proc_key)(i, eq, ef, sc) if sc["path"] is not None else "none"
                 pause = int((ef["pause"] if items else 0) * n.PAUSE_SCALE / pdiv) + aft
                 items.append((i, ef, sc, eq, key, pause))
                 # «пауза после фразы» — ровно столько секунд в готовом файле (общий множитель пауз книги её не меняет)
                 aft = int(round(1000 * float(ef.get("after") or 0) * (self.speed or 1.0)))
             chains = {it[0]: self.chain(it[0]) for it in items} if self._abs else {}
-        ver = sha("|".join(f"{it[4]}:{it[5]}" for it in items) + (f"|+{aft}" if aft else "") + self.asm_sig(), 16)
+            indices = {i for it in items for i in ([it[0]] + (chains.get(it[0]) or []))}
+            # The processed-audio key ignores book position so identical speech can share a WAV cache.
+            # Render metadata contains UID anchors and must be tied to this exact row snapshot.
+            row_snapshots = {i: dict(self.rows[i]) for i in indices}
+            uid_snapshots = {i: self.uids[i] for i in indices}
+            roles_snapshot = copy.deepcopy(self.roles)
+            identity = []
+            for it in items:
+                i = it[0]
+                chain = chains.get(i) or [i]
+                row = row_snapshots[i]
+                # Include every row field and effective edit that downstream sidecars/chapters read.
+                # A changed paragraph number, row ID, speaker tag or lock/tech edit must stale the export too.
+                base_roles = [self.base_roles[j] if j < len(self.base_roles) else "" for j in chain]
+                chain_rows = [row_snapshots[j] for j in chain]
+                identity.append([uid_snapshots[i], [uid_snapshots[j] for j in chain], chain_rows, base_roles, it[1]])
+            export_config = [getattr(self, "speed", 1.0), getattr(self, "fmt", ""),
+                             getattr(self, "bitrate", ""), getattr(self, "title", ""),
+                             getattr(self, "author", ""), roles_snapshot, self.asm_sig()]
+            ver = sha(jd([identity, export_config]) + "|" + "|".join(f"{it[4]}:{it[5]}" for it in items)
+                      + (f"|+{aft}" if aft else ""), 16)
         if not want_audio:
             return {"ver": ver, "items": items}, None
-        done = self._proc_many(items, op)
+        done = self._proc_many(items, op, row_snapshots=row_snapshots, roles_snapshot=roles_snapshot)
         pieces, segs, chapters, t = [], [], [], 0.0
         for i, ef, sc, eq, key, pause in items:
-            r = self.rows[i]
+            r = row_snapshots[i]
             pieces.append(np.zeros(int(sr * pause / 1000), dtype="float32"))
             t += pause / 1000
             if r["kind"] == "head":
@@ -1757,13 +1896,13 @@ class Studio:
                     chapters.pop()
                 chapters.append((t, r["ch_title"]))
             x = done[key] if key != "none" else np.zeros(int(sr * 0.8), dtype="float32")
-            segs.append([self.uids[i], round(t, 3), round(t + len(x) / sr, 3)])
+            segs.append([uid_snapshots[i], round(t, 3), round(t + len(x) / sr, 3)])
             ch = chains.get(i) or [i]
             if len(ch) > 1:                                    # места присоединённых фраз внутри общей записи — по доле букв
-                ws = [max(1, len(n.RE_RU_LETTERS.sub("", self.rows[j]["text"]))) for j in ch]
+                ws = [max(1, len(n.RE_RU_LETTERS.sub("", row_snapshots[j]["text"]))) for j in ch]
                 tot, acc, ln = float(sum(ws)), ws[0], len(x) / sr
                 for j, w in zip(ch[1:], ws[1:]):
-                    segs.append([self.uids[j], round(t + ln * acc / tot, 3), round(t + ln * (acc + w) / tot, 3)])
+                    segs.append([uid_snapshots[j], round(t + ln * acc / tot, 3), round(t + ln * (acc + w) / tot, 3)])
                     acc += w
             pieces.append(x)
             t += len(x) / sr
@@ -1930,6 +2069,106 @@ class Studio:
             return None
         return dict(file=ex.get("file"), dur=ex.get("dur"), at=ex.get("at"), fresh=ex.get("ver") == ver,
                     exists=Path(ex.get("file", "")).exists(), disk=ex.get("disk"))
+
+    # Editable manuscript preparation before audio exists. Read-only: no part/WAV creation.
+    def book_text_view(self, chapter: int = 0, offset: int = 0, limit: int = 50,
+                       query: str = "", confidence: str = "", role_filter: str = "") -> dict:
+        self.load_rows()
+        chapters = [
+            dict(ch=int(ch), title=str(title), count=int(b - a + 1))
+            for ch, (a, b, title) in sorted(self.chapters.items())
+        ]
+        if not chapters:
+            raise Oops("в сегментации книги нет глав")
+        chapter_ids = {item["ch"] for item in chapters}
+        chapter = int(chapter or 0)
+        if chapter != 0 and chapter not in chapter_ids:
+            raise Oops("указанная глава отсутствует в сегментации книги")
+        offset = max(0, int(offset))
+        limit = min(max(1, int(limit)), 80)
+        confidence = str(confidence or "").strip().lower()
+        if confidence not in ("", "high", "mid", "low", "none"):
+            raise Oops("неизвестный фильтр уверенности")
+        query = str(query or "").strip().casefold()[:160]
+        role_filter = str(role_filter or "").strip()
+        if role_filter and role_filter not in self.roles["roles"]:
+            raise Oops("указанная роль отсутствует в roles.json")
+
+        if chapter == 0:
+            start, end, title = 0, len(self.rows) - 1, "Вся книга"
+        else:
+            start, end, title = self.chapters[chapter]
+
+        with self.lock:
+            candidates = []
+            effective = {}
+            for i in range(start, end + 1):
+                row = self.rows[i]
+                row_confidence = str(row.get("conf") or "none").lower()
+                if confidence and row_confidence != confidence:
+                    continue
+                eff = self.eff(i)
+                effective[i] = eff
+                role = str(eff.get("role") or "")
+                if role_filter and role != role_filter:
+                    continue
+                if query:
+                    haystack = " ".join((
+                        str(row.get("id", "")), str(row.get("speaker", "")), role,
+                        str(row.get("text", "")), str(eff.get("tech") or "")
+                    )).casefold()
+                    if query not in haystack:
+                        continue
+                candidates.append(i)
+
+            result_count = len(candidates)
+            if result_count:
+                offset = min(offset, ((result_count - 1) // limit) * limit)
+            else:
+                offset = 0
+            selected = candidates[offset:offset + limit]
+            result_rows = []
+            for i in selected:
+                row = self.rows[i]
+                eff = effective[i]
+                result_rows.append(dict(
+                    uid=str(self.uids[i]),
+                    id=str(row.get("id", "")),
+                    para=int(row.get("para") or 0),
+                    chapter=int(row.get("chapter") or 0),
+                    chapter_title=str(row.get("ch_title") or ""),
+                    kind=str(row.get("kind") or ""),
+                    role=str(eff.get("role") or ""),
+                    base_role=str(self.base_roles[i]),
+                    text=str(self.row_text(i) or ""),
+                    tech=str(eff.get("tech") or ""),
+                    tech_src=str(eff.get("tech_src") or "base"),
+                    conf=str(row.get("conf") or "none"),
+                    locked=bool(eff.get("locked")),
+                    index=i + 1,
+                ))
+
+        # Preserve case-sensitive role names ("голос" and "Голос" are distinct keys).
+        role_names = [str(name) for name in self.roles["roles"].keys()]
+        manuscript_title = str(self.rows[0].get("text") or self.title) if self.rows else self.title
+        return dict(
+            book=str(self.title),
+            manuscript_title=manuscript_title,
+            author=str(self.author),
+            chapter=chapter,
+            title=str(title),
+            offset=offset,
+            limit=limit,
+            chapter_count=end - start + 1,
+            result_count=result_count,
+            role_filter=role_filter,
+            rows=result_rows,
+            chapters=chapters,
+            roles=role_names,
+            total_rows=len(self.rows),
+            text_only=True,
+            editable=True,
+        )
 
     def state_view(self) -> dict:
         self.load_rows()
@@ -2107,10 +2346,21 @@ class Studio:
                 uid, old, label = self.undo.pop()
                 if uid == "#cues":                             # звуки и громкости дорожек — одним снимком
                     snap = json.loads(old)
+                    before = jd({key: {"present": key in self.store, "value": self.store.get(key)}
+                                 for key in ("cues", "cue_seen", "sound_map", "mix", "kit_off")})
                     self.store["cues"], self.store["cue_seen"], self.store["sound_map"], self.store["mix"] = snap[:4]
                     if len(snap) > 4:
                         self.store["kit_off"] = snap[4]
-                    self.save("отмена: " + label)
+                    try:
+                        self.save("отмена: " + label)
+                    except Exception:
+                        for key, item in json.loads(before).items():
+                            if item["present"]:
+                                self.store[key] = item["value"]
+                            else:
+                                self.store.pop(key, None)
+                        self.undo.append((uid, old, label))
+                        raise
                     return uid
                 if uid == "#ins":                              # вставка добавлена / удалена / переписана
                     d = json.loads(old)
@@ -2119,7 +2369,14 @@ class Studio:
                         if x is None:
                             continue
                         if (self.store["segs"].get(x["id"]) or {}).get("locked"):
+                            self.undo.append((uid, old, label))
                             raise Oops("вставка закреплена — снимите закрепление, чтобы отменить её")
+                    elif d["op"] == "del" and x is None:
+                        pass
+                    elif d["op"] != "del" and x is None:
+                        continue
+                    before = jd({"ins": self.store["ins"], "segs": self.store["segs"]})
+                    if d["op"] == "add":
                         self.store["ins"].remove(x)
                         self.store["segs"].pop(x["id"], None)
                     elif d["op"] == "del":
@@ -2128,8 +2385,6 @@ class Studio:
                             if d.get("e"):
                                 self.store["segs"][d["ins"]["id"]] = d["e"]
                     else:
-                        if x is None:
-                            continue
                         x["text"] = d["text"]
                         if d.get("tech"):
                             x["tech"] = d["tech"]
@@ -2137,36 +2392,59 @@ class Studio:
                             x.pop("tech", None)
                         if d.get("etech") is not None:
                             self.E(x["id"], create=True)["tech"] = d["etech"]
-                    self.save("отмена: " + label)
+                    try:
+                        self.save("отмена: " + label)
+                    except Exception:
+                        state = json.loads(before)
+                        self.store["ins"], self.store["segs"] = state["ins"], state["segs"]
+                        self.undo.append((uid, old, label))
+                        raise
                     self.rows_changed()
                     return uid
                 if uid == "#join":
                     d = json.loads(old)
+                    snap_before = jd(self.store["segs"])
+                    abs_before = jd(self._abs)
                     if any((self.store["segs"].get(d[q]) or {}).get("locked") for q in ("a", "b")):
                         self.undo.append((uid, old, label))
                         raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
-                    for q, w in (("a", "ea"), ("b", "eb")):
-                        cur = self.store["segs"].get(d[q]) or {}
-                        if d[w] is None:
-                            self.store["segs"].pop(d[q], None)
-                        else:
-                            d[w]["tseq"] = max(int(d[w].get("tseq", 0)), int(cur.get("tseq", 0)))       # дубли не теряем
-                            self.store["segs"][d[q]] = d[w]
-                    self.joins_refresh()
-                    self.save("отмена: " + label, {"uid": d["a"]})
+                    try:
+                        for q, w in (("a", "ea"), ("b", "eb")):
+                            cur = self.store["segs"].get(d[q]) or {}
+                            if d[w] is None:
+                                self.store["segs"].pop(d[q], None)
+                            else:
+                                d[w]["tseq"] = max(int(d[w].get("tseq", 0)), int(cur.get("tseq", 0)))       # дубли не теряем
+                                self.store["segs"][d[q]] = d[w]
+                        self.joins_refresh()
+                        self.save("отмена: " + label, {"uid": d["a"]})
+                    except Exception:
+                        self.store["segs"] = json.loads(snap_before)
+                        self._abs = json.loads(abs_before)
+                        self.undo.append((uid, old, label))
+                        raise
                     return d["a"]
                 if uid not in self.idx_of:
                     continue
                 cur = self.store["segs"].get(uid) or {}
                 if cur.get("locked") and not (old or {}).get("locked"):
+                    self.undo.append((uid, old, label))
                     raise Oops("последняя правка — в закреплённой фразе; снимите закрепление, чтобы отменить")
-                if old is None:
-                    self.store["segs"].pop(uid, None)
-                else:
-                    old["tseq"] = max(int(old.get("tseq", 0)), int(cur.get("tseq", 0)))   # дубли не теряем
-                    self.store["segs"][uid] = old
-                self.joins_refresh()
-                self.save("отмена: " + label, {"uid": uid})
+                before = jd(self.store["segs"])
+                abs_before = jd(self._abs)
+                try:
+                    if old is None:
+                        self.store["segs"].pop(uid, None)
+                    else:
+                        old["tseq"] = max(int(old.get("tseq", 0)), int(cur.get("tseq", 0)))   # дубли не теряем
+                        self.store["segs"][uid] = old
+                    self.joins_refresh()
+                    self.save("отмена: " + label, {"uid": uid})
+                except Exception:
+                    self.store["segs"] = json.loads(before)
+                    self._abs = json.loads(abs_before)
+                    self.undo.append((uid, old, label))
+                    raise
                 return uid
             raise Oops("отменять нечего")
 
@@ -2188,7 +2466,7 @@ class Studio:
             out.parent.mkdir(parents=True, exist_ok=True)
             rid = f"q{int(time.time() * 1000):x}{secrets.token_hex(2)}"
             req = dict(rid=rid, role=ef["role"], text=ef["tech"], raw=ef["tech"].replace(ACUTE, ""), out=str(out),
-                       variant=variant or {}, tries=2, rescue=True)
+                       variant=variant or {}, tries=2, rescue=True, atomic=bool(e.get("join")))
             ch = self.chain(i)
             prep = ACUTE not in ef["tech"] and (bool(self.rows[i].get("ins"))        # вставка без ударений: их расставит движок
                                                 or (ef["tech_src"] != "manual" and self.accent_mode() != "none"
@@ -2975,34 +3253,72 @@ class Studio:
             out.append(f"{mmss(t0 / sp)}  {who}: {ef['tech']}" + (f"   [{', '.join(tags)}]" if tags else ""))
         return "\n".join(out) + "\n"
 
+    def _assert_export_current(self, a: int, b: int, meta: dict, anchors=None):
+        """Refuse to publish a render if rows/settings changed while the expensive encoding ran.
+
+        Call while holding self.lock. timeline() uses the same RLock, so this comparison and
+        subsequent sidecar/mix publication form one consistent commit window.
+        """
+        current, _ = self.timeline(a, b, False)
+        if current.get("ver") != meta.get("ver"):
+            raise Oops("книга или параметры сборки изменились во время экспорта; старый готовый файл сохранён. "
+                       "Запустите сборку ещё раз для текущей редакции.")
+        if anchors and any(self.idx_of.get(uid) != index for uid, index in anchors):
+            raise Oops("границы части или главы изменились во время экспорта; старый готовый файл сохранён.")
+
     def export_part(self, k: int) -> dict:
-        p = self.open_part(k)
-        name = f"{self.title} — часть {k:02d} ({self.rows[p['a']]['ch_title']})"
-        with self.rlock, Op(self, f"готовая часть {k}") as op:
-            meta, audio = self.timeline(p["a"], p["b"], True, op)
-            out = self.final_parts / f"part_{k:02d}.{self.fmt}"
-            op.stage(f"запись {self.fmt} с выравниванием громкости")
-            total = self._encode(audio, meta["sr"], meta["chapters"], out, name)
-            write_atomic(out.with_name(f"part_{k:02d}.times.tsv"), self._times_tsv(meta))
-            write_atomic(out.with_name(f"part_{k:02d}.tech.txt"), self._tech_txt(meta, f"часть {k:02d}"))
-            meta["ref"] = round(active_rms(audio), 5)          # та же опорная громкость голоса, что в предпросмотре
-            mf = self.render_dir / f"part_{k:02d}.json"
-            if (read_json(mf, None) or {}).get("ver") != meta["ver"]:
-                # часть могли ни разу не открывать в окне (её принял автомат «вся книга»): длина и версия — для списка частей;
-                # сам предпросмотр соберётся, когда часть откроют
-                write_atomic(mf, jd(meta))
-            op.stage("сведение со звуками и музыкой")
-            vs = self._export_mixes(p["a"], p["b"], meta, out, "chasti", name, audio=audio, sr=meta["sr"], op=op)
-            mix = vs.get("all")
-            op.stage("копия на Яндекс Диск")
-            disk = self._to_disk(out, "chasti")
-            op.note = self._export_note(out, total, mix, disk, vs)
         with self.lock:
-            ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, mix=mix, vars=vs,
-                      csig=self.cues_sig(p["a"], p["b"]), kv=2)
-            self.store["parts"][k - 1]["export"] = ex
-            self.save(f"собрана готовая часть {k}", {"file": str(out), "dur": ex["dur"]})
-        return ex
+            p = self.open_part(k)
+            a, b = p["a"], p["b"]
+            anchors = ((self.uids[a], a), (self.uids[b], b))
+            name = f"{self.title} — часть {k:02d} ({self.rows[a]['ch_title']})"
+        out = self.final_parts / f"part_{k:02d}.{self.fmt}"
+        stage_dir = out.parent / f".{out.stem}.stage-{secrets.token_hex(8)}"
+        stage_dir.mkdir(parents=True, exist_ok=False)
+        staged_voice = stage_dir / out.name
+        try:
+            with self.rlock, Op(self, f"готовая часть {k}") as op:
+                meta, audio = self.timeline(a, b, True, op)
+                op.stage(f"запись {self.fmt} с выравниванием громкости")
+                total = self._encode(audio, meta["sr"], meta["chapters"], staged_voice, name)
+                meta["ref"] = round(active_rms(audio), 5)
+                staged_times = stage_dir / f"part_{k:02d}.times.tsv"
+                staged_tech = stage_dir / f"part_{k:02d}.tech.txt"
+                mf = self.render_dir / f"part_{k:02d}.json"
+                staged_meta = stage_dir / mf.name
+
+                with self.lock:
+                    self._assert_part_range_current(k, a, b)
+                    self._assert_export_current(a, b, meta, anchors)
+                    if (k < 1 or k > len(self.store["parts"])
+                            or self.store["parts"][k - 1].get("last") != anchors[1][0]):
+                        raise Oops(f"граница части {k} изменилась во время экспорта; старый готовый файл сохранён.")
+                    write_atomic(staged_times, self._times_tsv(meta))
+                    write_atomic(staged_tech, self._tech_txt(meta, f"часть {k:02d}"))
+                    op.stage("сведение со звуками и музыкой")
+                    vs = self._export_mixes(a, b, meta, staged_voice, "chasti", name,
+                                            audio=audio, sr=meta["sr"], op=op)
+                    mix = vs.get("all")
+                    if (read_json(mf, None) or {}).get("ver") != meta["ver"]:
+                        write_atomic(staged_meta, jd(meta))
+
+                    # Publish only after the current edition has been revalidated under the state lock.
+                    os.replace(staged_voice, out)
+                    os.replace(staged_times, out.with_name(f"part_{k:02d}.times.tsv"))
+                    os.replace(staged_tech, out.with_name(f"part_{k:02d}.tech.txt"))
+                    if staged_meta.exists():
+                        os.replace(staged_meta, mf)
+                    op.stage("копия на Яндекс Диск")
+                    disk = self._to_disk(out, "chasti")
+                    op.note = self._export_note(out, total, mix, disk, vs)
+
+                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, mix=mix, vars=vs,
+                              csig=self.cues_sig(a, b), kv=2)
+                    self.store["parts"][k - 1]["export"] = ex
+                    self.save(f"собрана готовая часть {k}", {"file": str(out), "dur": ex["dur"]})
+            return ex
+        finally:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
     def ffmpeg(self) -> str:
         return (n.find_ffmpeg() if hasattr(n, "find_ffmpeg") else None) or shutil.which("ffmpeg") or "ffmpeg"
@@ -3147,27 +3463,46 @@ class Studio:
         return self.export_chapter(c)
 
     def export_chapter(self, c: int) -> dict:
-        a, b, title = self.chapter_range(c)
-        with self.rlock, Op(self, f"глава {c} отдельным файлом") as op:
-            meta, audio = self.timeline(a, b, True, op)
-            out = self.final_ch / f"{c:02d} {safe_file(title)}.{self.fmt}"
-            op.stage(f"запись {self.fmt} с выравниванием громкости")
-            total = self._encode(audio, meta["sr"], meta["chapters"], out, f"{self.title} — {title}")
-            write_atomic(out.with_suffix(".tech.txt"), self._tech_txt(meta, title))
-            meta["ref"] = round(active_rms(audio), 5)
-            op.stage("сведение со звуками и музыкой")
-            vs = self._export_mixes(a, b, meta, out, "glavy", f"{self.title} — {title}", audio=audio, sr=meta["sr"], op=op)
-            mix = vs.get("all")
-            op.stage("копия на Яндекс Диск")
-            disk = self._to_disk(out, "glavy")
-            op.note = self._export_note(out, total, mix, disk, vs)
         with self.lock:
-            lk = sum(1 for i in range(a, b + 1) if (self.store["segs"].get(self.uids[i]) or {}).get("locked"))
-            ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, locked=lk, count=b - a + 1,
-                      mix=mix, vars=vs, csig=self.cues_sig(a, b))
-            self.store["chapters"].setdefault(str(c), {})["export"] = ex
-            self.save(f"собрана глава {c}", {"file": str(out)})
-        return ex
+            a, b, title = self.chapter_range(c)
+            anchors = ((self.uids[a], a), (self.uids[b], b))
+        out = self.final_ch / f"{c:02d} {safe_file(title)}.{self.fmt}"
+        stage_dir = out.parent / f".{out.stem}.stage-{secrets.token_hex(8)}"
+        stage_dir.mkdir(parents=True, exist_ok=False)
+        staged_voice = stage_dir / out.name
+        try:
+            with self.rlock, Op(self, f"глава {c} отдельным файлом") as op:
+                meta, audio = self.timeline(a, b, True, op)
+                op.stage(f"запись {self.fmt} с выравниванием громкости")
+                total = self._encode(audio, meta["sr"], meta["chapters"], staged_voice, f"{self.title} — {title}")
+                meta["ref"] = round(active_rms(audio), 5)
+                staged_tech = stage_dir / out.with_suffix(".tech.txt").name
+
+                with self.lock:
+                    self._assert_export_current(a, b, meta, anchors)
+                    current_chapter = self.chapters.get(c)
+                    if not current_chapter or tuple(current_chapter[:2]) != (a, b) or current_chapter[2] != title:
+                        raise Oops(f"границы главы {c} изменились во время экспорта; старый готовый файл сохранён.")
+                    write_atomic(staged_tech, self._tech_txt(meta, title))
+                    op.stage("сведение со звуками и музыкой")
+                    vs = self._export_mixes(a, b, meta, staged_voice, "glavy", f"{self.title} — {title}",
+                                            audio=audio, sr=meta["sr"], op=op)
+                    mix = vs.get("all")
+                    os.replace(staged_voice, out)
+                    os.replace(staged_tech, out.with_suffix(".tech.txt"))
+                    op.stage("копия на Яндекс Диск")
+                    disk = self._to_disk(out, "glavy")
+                    op.note = self._export_note(out, total, mix, disk, vs)
+
+                    lk = sum(1 for i in range(a, b + 1)
+                             if (self.store["segs"].get(self.uids[i]) or {}).get("locked"))
+                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, locked=lk,
+                              count=b - a + 1, mix=mix, vars=vs, csig=self.cues_sig(a, b))
+                    self.store["chapters"].setdefault(str(c), {})["export"] = ex
+                    self.save(f"собрана глава {c}", {"file": str(out)})
+            return ex
+        finally:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
     # ================================================================== ЗВУКИ, ФОН И МУЗЫКА (дорожки на ленте)
     # Заглушка (cue) — место на ленте, привязанное к фразе: {id, kind sfx|amb|mus, label, uid, at "s"|"e", off c,
@@ -3519,33 +3854,82 @@ class Studio:
         return self.sound_path(self.cue_ref(c))
 
     def book_clock(self) -> dict:
-        """Сквозное время книги по собранным частям конвейера: номер строки -> (начало, конец) в секундах от начала
-        книги. По нему фон и музыка, начавшиеся в прошлой части, продолжаются с того же места, а не с начала файла."""
-        if time.time() - self._clock[0] < 30:
-            return self._clock[1]
-        ck, off, num = {}, 0.0, 1
-        while num < 2000:
-            try:
-                lines = (n.PARTS / f"part_{num:02d}.times.tsv").read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
-                break
-            last = 0.0
-            for ln in lines:
-                c = ln.split("\t")
-                if len(c) < 8:
-                    continue
+        """Сквозное время книги по картам частей. Устаревшая карта не должна привязаться к повторно
+        использованным числовым ID после переразбивки или сдвинуть время следующих частей."""
+        with self.lock:
+            # Cache by file identity as well as age: a new export must invalidate the clock immediately,
+            # not after the old 30-second TTL expires.
+            file_sig = []
+            for num in range(1, 2000):
+                f = n.PARTS / f"part_{num:02d}.times.tsv"
                 try:
-                    t0, t1 = float(c[6]), float(c[7])
-                except ValueError:
-                    continue
-                i = self.id2i.get(c[2])
-                if i is not None:
+                    st = f.stat()
+                except OSError:
+                    break
+                try:
+                    digest = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+                except OSError:
+                    break
+                file_sig.append((num, st.st_size, st.st_mtime_ns, digest))
+            file_sig = tuple(file_sig)
+            if (time.time() - self._clock[0] < 30
+                    and getattr(self, "_clock_sig", None) == file_sig):
+                return self._clock[1]
+
+            ck, off, num = {}, 0.0, 1
+            while num < 2000:
+                try:
+                    lines = (n.PARTS / f"part_{num:02d}.times.tsv").read_text(encoding="utf-8").splitlines()
+                except (OSError, UnicodeDecodeError):
+                    break
+                part_map, last = {}, 0.0
+                prev_i, prev_t0 = -1, -1.0
+                invalid = False
+                for ln in lines:
+                    if not ln.strip():
+                        continue
+                    c = ln.split("\t")
+                    if len(c) < 8:
+                        invalid = True
+                        break
+                    try:
+                        t0, t1 = float(c[6]), float(c[7])
+                    except (TypeError, ValueError):
+                        invalid = True
+                        break
+                    i = self.id2i.get(c[2])
+                    if (i is None or not (0 <= i < len(self.rows)) or i <= prev_i
+                            or t0 < 0 or t1 < t0 or t0 < prev_t0
+                            or t0 != t0 or t1 != t1 or abs(t0) == float("inf") or abs(t1) == float("inf")):
+                        invalid = True
+                        break
+                    # times.tsv carries the source stem, role and text as independent identity checks.
+                    # Numeric segment IDs are sequential and may be reused by a newly segmented edition.
+                    try:
+                        src = self.src(i)
+                        expected_stem = src["path"].stem if src.get("path") is not None else "-"
+                        expected_text = self.row_text(i)[:120]
+                        expected_role = self.eff(i).get("role")
+                    except Exception:
+                        invalid = True
+                        break
+                    if c[4] != expected_stem or c[5] != expected_text or c[3] != expected_role:
+                        invalid = True
+                        break
+                    part_map[i] = (t0, t1)
+                    prev_i, prev_t0 = i, t0
+                    last = max(last, t1)
+                # Fail closed for a mixed/old map. Do not use even its matching rows: their local offsets
+                # may have shifted, and later parts cannot be placed on a trustworthy global clock.
+                if invalid or not part_map:
+                    break
+                for i, (t0, t1) in part_map.items():
                     ck[i] = (off + t0, off + t1)
-                last = max(last, t1)
-            off += last + 1.0
-            num += 1
-        self._clock = (time.time(), ck)
-        return ck
+                off += last + 1.0
+                num += 1
+            self._clock = (time.time(), ck)
+            self._clock_sig = file_sig
+            return ck
 
     def cue_lead(self, c: dict, i: int, a: int) -> float:
         """Звук начался раньше отрезка (в прошлой части): сколько секунд он уже отыграл к началу отрезка. Неизвестно
@@ -3565,7 +3949,9 @@ class Studio:
         if i is None:
             return None
         ie = self.idx_of.get(c.get("e_uid")) if c.get("e_uid") else None
-        if (ie if ie is not None else i) < a or i > b:
+        # A finite cue without an end anchor (typically a short SFX) can still cross a part boundary.
+        # Only an explicit end anchor strictly before this part makes it irrelevant here.
+        if (ie is not None and ie < a) or i > b:
             return None
         cont = i < a
         if cont:
@@ -3592,7 +3978,13 @@ class Studio:
                         ln = max(0.05, len(self.snd(p)) / SND_SR - float(c.get("foff") or 0))
                     except Exception:
                         pass
-            t1 = t0 + float(ln)
+            # cont is elapsed source time for a cue continued from an earlier part. Its remaining
+            # duration must shrink by that amount; otherwise the next part contains a silent tail.
+            elapsed = float(cont) if cont and not isinstance(cont, bool) and cont > 0.001 else 0.0
+            remaining = float(ln) - elapsed
+            if remaining <= 0.0:
+                return None
+            t1 = t0 + remaining
         if t1 > total:
             t1, cut = total, True
         return t0, max(t1, t0 + 0.05), cont, cut
@@ -4367,30 +4759,64 @@ class Studio:
 
     # ------------------------------------------------------------------ граница части
     def set_boundary(self, k: int, uid: str):
-        """Закончить часть k на этой фразе (следующая часть начнётся со следующей). Только на границе абзаца и пока обе
-        части не закреплены."""
-        self.auto_guard("перенести границу части")
+        """Перенести границу двух соседних частей как одну правку.
+
+        Во время «Вся книга» изменение запрещено: сначала поставьте автомат на паузу,
+        чтобы go/воркеры не продолжали озвучивать старую границу. При сдвиге сбрасываем
+        опорный темп обеих затронутых частей; экспорт соседней части остаётся в истории
+        и будет распознан как устаревший по новой версии таймлайна.
+        """
         with self.lock:
-            self.open_part(k)
+            self.auto_guard("перенести границу части")
             pl = self.plan()
-            p, i = pl[k - 1], self.idx_of.get(uid)
+            if not isinstance(k, int) or k < 1 or k > len(pl):
+                raise Oops("такой части пока нет")
+            p = pl[k - 1]
+            if not p["opened"]:
+                raise Oops("сначала откройте часть, затем перенесите её границу")
+            i = self.idx_of.get(uid)
             if i is None:
                 raise Oops("этой фразы больше нет в книге — обновите окно")
             nxt = pl[k] if k < len(pl) else None
             hi = nxt["b"] - 1 if nxt else len(self.rows) - 1
             if not (p["a"] <= i <= hi):
                 raise Oops("границу можно двигать в пределах этой и следующей части")
-            if self.store["parts"][k - 1].get("locked") or (nxt and nxt["opened"] and self.store["parts"][k].get("locked")):
+            current_rec = self.store["parts"][k - 1]
+            next_rec = self.store["parts"][k] if nxt and nxt["opened"] and k < len(self.store["parts"]) else None
+            if current_rec.get("locked") or (next_rec and next_rec.get("locked")):
                 raise Oops("часть закреплена — сначала снимите закрепление")
+
             i = self.pipe_at(i, p["a"])                    # вставка — граница по её опорной реплике
             t2 = self.ins_tail(i)
+            if t2 < p["a"] or t2 > hi:
+                raise Oops("граница после учёта вставленных фраз вышла за пределы соседних частей")
+            if t2 == p["b"]:
+                raise Oops("часть уже заканчивается на этой фразе")
             r2 = self.rows[t2 + 1] if t2 + 1 < len(self.rows) else None
             if r2 is not None and not (r2["kind"] == "head" or int(r2["pause_before_ms"]) >= n.PAUSE["para"]):
                 raise Oops("часть должна кончаться на конце абзаца — выберите последнюю фразу абзаца")
-            rec = self.store["parts"][k - 1]
-            rec["last"], rec["last_i"], rec["last_p"], rec["export"] = self.uids[i], i, self.pidx[i], None
+
+            # One save covers both sides of the boundary. A failed write restores the in-memory plan.
+            old_parts = copy.deepcopy(self.store["parts"])
+            old_cache = self._parts_cache
+            current_rec["last"], current_rec["last_i"], current_rec["last_p"] = self.uids[i], i, self.pidx[i]
+            current_rec["eq"] = None
+            current_rec["export"] = None
+            if next_rec is not None:
+                next_rec["eq"] = None
             self._parts_cache = None
-            self.save(f"граница части {k} перенесена", {"part": k, "uid": uid})
+            try:
+                self.save(f"граница части {k} перенесена", {"part": k, "uid": uid, "next_part": k + 1 if next_rec else None})
+            except Exception:
+                self.store["parts"] = old_parts
+                self._parts_cache = old_cache
+                raise
+
+    def _assert_part_range_current(self, k: int, a: int, b: int) -> None:
+        """Do not publish an export if either edge moved while its audio was being rendered."""
+        pl = self.plan()
+        if k < 1 or k > len(pl) or pl[k - 1]["a"] != a or pl[k - 1]["b"] != b:
+            raise Oops(f"границы части {k} изменились во время экспорта; старый готовый файл сохранён. Соберите часть заново.")
 
     # ------------------------------------------------------------------ движок (воркеры озвучки)
     def workers(self) -> list:
@@ -5015,9 +5441,8 @@ class Studio:
     def proj_dir(self) -> Path:
         return self.dir / "projects"
 
-    def home_id(self) -> str:
-        """Метка этой папки студии. Проект с другой меткой сохранён в другом месте: его записи могут называться так же,
-        как здешние, и быть другими — при загрузке такие ложатся отдельно."""
+    def home_id(self, create: bool = True) -> str:
+        """Метка этой папки студии. create=False используется в предварительных проверках без записи на диск."""
         f = self.dir / "home.id"
         try:
             v = f.read_text(encoding="ascii").strip()
@@ -5025,6 +5450,8 @@ class Studio:
                 return v
         except (OSError, UnicodeError):
             pass
+        if not create:
+            return ""
         v = secrets.token_hex(8)
         write_atomic(f, v)
         return v
@@ -5374,12 +5801,18 @@ class Studio:
 
     def _proj_read(self, f: Path):
         import zipfile
+        zf = None
         try:
             zf = zipfile.ZipFile(f)
             m = json.loads(zf.read("manifest.json").decode("utf-8"))
             if m.get("format") != "noxproj":
                 raise ValueError
         except Exception:
+            if zf is not None:
+                try:
+                    zf.close()
+                except Exception:
+                    pass
             raise Oops(f"«{f.name}» не читается как файл проекта студии: он повреждён или это другой файл")
         try:
             if int(m.get("ver") or 0) > self.PROJ_FMT:
@@ -5437,17 +5870,24 @@ class Studio:
             return "идёт работа с голосами — подождите"
         return ""                                          # сверка ударений не мешает: её итоги привязаны к тексту фраз
 
-    def _proj_audio_check(self, files: dict, need: dict) -> dict:
-        """Быстрая оценка (по именам и размерам): какие записи проекта уже есть на диске, какие добавятся."""
-        r = dict(have=0, add=0, differ=0, trash=0, missing=0)
+    def _proj_audio_check(self, files: dict, need: dict, foreign: bool = False) -> dict:
+        """Оценка записей проекта. Для чужой папки отдельно отмечает WAV без вложенных байтов: совпадение размера
+        не доказывает, что это та же запись."""
+        r = dict(have=0, add=0, differ=0, trash=0, missing=0, unverified=0)
         for arc, v in list(files.items()) + list(need.items()):
             m = self.TAKE_ARC.match(arc)
             if not m or m.group(3) != "wav":
                 continue
             size = v[0] if isinstance(v, list) else v
+            want_sha = v[1] if isinstance(v, list) and len(v) > 1 else None
             dst = self.take_path(m.group(1), m.group(2))
+            if foreign and arc in need and (dst.exists() or self._trash_find(m.group(1), m.group(2))):
+                r["unverified"] += 1
             if dst.exists():
-                r["have" if dst.stat().st_size == size else "differ"] += 1
+                same = dst.stat().st_size == size
+                if same and want_sha:
+                    same = self._sha_file(dst) == want_sha
+                r["have" if same else "differ"] += 1
             elif arc in files:
                 r["add"] += 1                                  # в том числе запись-двойник: она лежит в файле под другим именем
             elif self._trash_find(m.group(1), m.group(2)):
@@ -5455,6 +5895,57 @@ class Studio:
             else:
                 r["missing"] += 1
         return r
+
+    def _proj_sid_conflict(self, sid: str, strict: bool, pf: dict, names: set, canon: dict) -> bool:
+        """Можно ли безопасно повторно использовать SID при загрузке проекта.
+
+        У проекта из другой папки WAV без самих байтов в архиве нельзя считать совпадающим
+        только по имени и размеру: активный или удалённый локальный дубль может быть другим.
+        """
+        if strict:
+            for tid, item in pf.items():
+                arc = item[0]
+                source_arc = arc if arc in names else canon.get(arc)
+                if source_arc not in names:
+                    active = self.takes_dir / sid / f"{sid}_{tid}.wav"
+                    if active.exists() or self._trash_find(sid, tid, "wav") is not None:
+                        return True
+        try:
+            local = [x for x in os.scandir(self.takes_dir / sid) if x.is_file()]
+        except OSError:
+            return False
+        for x in local:
+            mt = re.fullmatch(re.escape(sid) + r"_(t\d+)\.wav", x.name)
+            if not mt:
+                continue
+            q = pf.get(mt.group(1))
+            if q is None:
+                if strict:
+                    return True
+                continue
+            source_arc = q[0] if q[0] in names else canon.get(q[0])
+            if x.stat().st_size != q[1] or (q[2] and source_arc in names and self._sha_file(Path(x.path)) != q[2]):
+                return True
+        return False
+
+    def _proj_asset_conflicts(self, files: dict) -> list:
+        """Find project assets whose destination name is already occupied by different or unverifiable bytes.
+
+        Existing asset references are name-based. Until the import path can transactionally remap every
+        reference, any content mismatch must stop before the current book or local library is changed.
+        """
+        conflicts = []
+        for arc, value in files.items():
+            kind = arc.split("/", 1)[0]
+            name = Path(arc).name
+            if kind not in ("imports", "sounds") or not name or name == "index.json":
+                continue
+            digest = value[1] if isinstance(value, list) and len(value) > 1 else None
+            directory = self.dir / "imports" if kind == "imports" else self.sounds_dir
+            local = directory / name
+            if local.is_file() and (not digest or self._sha_file(local) != str(digest)):
+                conflicts.append(arc)
+        return sorted(conflicts)
 
     @staticmethod
     def _span(ns: list) -> str:
@@ -5477,7 +5968,10 @@ class Studio:
             return dict(ok=False, name=name, info=info, now=cur, proj=pc, compat=cp, audio={}, warn=[], busy="",
                         why=f"это проект другой книги («{m.get('title') or '?'}»): из {cp['total']} его правок в этой книге "
                             f"нашлись {cp['found']}. Сюда он не загружается.")
-        au = self._proj_audio_check(files, need)
+        local_home = self.home_id(create=False)
+        foreign = not local_home or m.get("home") != local_home
+        au = self._proj_audio_check(files, need, foreign=foreign)
+        asset_conflicts = self._proj_asset_conflicts(files)
         warn = []
         if not cp["same"] and cp["lost"]:
             warn.append(f"Книга с тех пор переразбита: из {cp['total']} правок проекта свои фразы найдут {cp['found']}, "
@@ -5489,8 +5983,15 @@ class Studio:
             warn.append(f"Закреплённых частей станет меньше: сейчас — {self._span(cur['fixed'])}, в проекте — "
                         f"{self._span(pc['fixed'])}. Части {self._span(back)} снова станут рабочими; конвейер при следующем "
                         f"запуске возьмётся за первую незакреплённую.")
+        if au["unverified"]:
+            warn.append(f"В другой папке студии найдено {au['unverified']} одноимённых локальных записей без WAV внутри проекта. "
+                        "Их содержимое не подтверждено: при первом импорте они не будут автоматически подставлены вместо исходных дублей.")
+        if asset_conflicts:
+            sample = ", ".join(asset_conflicts[:5])
+            warn.append(f"Конфликт пользовательских звуков/исходников с тем же именем, но другим или неподтверждённым содержимым: "
+                        f"{len(asset_conflicts)} ({sample}). Загрузка остановится, чтобы не подставить местный файл вместо проектного.")
         if au["missing"]:
-            warn.append(f"Записей не найдено: {au['missing']} (их нет ни в файле, ни на диске, ни в корзине студии). У таких фраз "
+            warn.append(f"Записей не найдено или их нельзя безопасно сопоставить: {au['missing']}. У таких фраз "
                         f"будет пометка «потерян дубль» — их можно переозвучить или вернуть к черновой записи.")
         if au["trash"]:
             warn.append(f"Дублей, удалённых позже, вернётся из корзины студии: {au['trash']}.")
@@ -5501,10 +6002,10 @@ class Studio:
         if gone:
             warn.append("Ролей из проекта сейчас нет в книге: " + ", ".join(gone[:6]) + (" и др." if len(gone) > 6 else "")
                         + " — у таких фраз останется роль из разметки.")
-        if m.get("home") != self.home_id():
+        if foreign:
             warn.append("Проект сохранён в другой папке или на другом компьютере: его записи лягут отдельно от здешних.")
-        return dict(ok=True, name=name, info=info, now=cur, proj=pc, compat=cp, audio=au, warn=warn,
-                    busy=self._proj_busy_why(), why="")
+        return dict(ok=True, name=name, info=info, now=cur, proj=pc, compat=cp, audio=au,
+                    asset_conflicts=asset_conflicts, warn=warn, busy=self._proj_busy_why(), why="")
 
     def _zip_extract(self, zf, arc: str, dst: Path, want_sha=None):
         import zipfile
@@ -5567,6 +6068,12 @@ class Studio:
             if cp["other"]:
                 raise Oops(f"это проект другой книги («{m.get('title') or '?'}»): из {cp['total']} его правок в этой книге "
                            f"нашлись {cp['found']}. Сюда он не загружается")
+            asset_conflicts = self._proj_asset_conflicts(files)
+            if asset_conflicts:
+                sample = ", ".join(asset_conflicts[:5])
+                raise Oops(f"проект содержит пользовательские звуки/исходники, для которых местный файл с тем же именем имеет другое или неподтверждённое содержимое "
+                           f"({len(asset_conflicts)}: {sample}). Загрузка отменена без изменений. "
+                           "Сначала освободите/переименуйте конфликтующие местные копии или перенесите проект в отдельную папку студии.")
             # 1. нынешнее состояние — в точку возврата: загрузку всегда можно отыграть назад
             snap = self.project_save(note="перед загрузкой проекта", kind="auto")
             stat = dict(have=0, added=0, remapped=0, trash=0, missing=0, damaged=0)
@@ -5594,24 +6101,7 @@ class Studio:
                 op.stage("записи: что уже есть, что добавить", len(sids))
 
                 def clash_in(c: str, strict: bool, pf: dict) -> bool:
-                    """Занята ли папка записей c другим звуком: файл с тем же номером дубля отличается от проектного;
-                    strict (проект из другой папки) — ещё и любой здешний дубль, которого в проекте нет."""
-                    try:
-                        local = [x for x in os.scandir(self.takes_dir / c) if x.is_file()]
-                    except OSError:
-                        return False
-                    for x in local:
-                        mt = re.fullmatch(re.escape(c) + r"_(t\d+)\.wav", x.name)
-                        if not mt:
-                            continue
-                        q = pf.get(mt.group(1))
-                        if q is None:
-                            if strict:
-                                return True
-                        elif x.stat().st_size != q[1] or (q[2] and (q[0] in names or canon.get(q[0]) in names)
-                                                          and self._sha_file(Path(x.path)) != q[2]):
-                            return True
-                    return False
+                    return self._proj_sid_conflict(c, strict, pf, names, canon)
 
                 for sid in sids:
                     op.step()
@@ -5712,31 +6202,70 @@ class Studio:
                     ex = (q or {}).get("export")
                     if ex and old_ch.get(c, {}).get("ver") != ex.get("ver"):
                         q["export"] = None
-                # 4. сама замена — одним действием
+                # 4. сама замена — одним действием. До атомарной записи edits.json любое исключение
+                # возвращает и модель, и все производные индексы к прежнему состоянию.
                 with self.lock:
                     orph0 = len(new["orphans"])
                     self.backup()
                     new["seq"] = max(seq, int(self.store.get("seq", 0) or 0))
+                    old_store = self.store
+                    row_attrs = ("rows", "roles", "keys", "uids", "pidx", "sidx", "idx_of", "id2i", "_spans",
+                                 "_clock", "stems", "base_roles", "role_cnt", "wavs", "chapters", "rows_sig",
+                                 "rows_at", "_abs")
+                    missing = object()
+                    old_rows = {key: getattr(self, key, missing) for key in row_attrs}
+                    old_undo, old_takes, old_jobs = list(self.undo), dict(self._takes), dict(self.jobs)
+                    old_parts_cache = self._parts_cache
                     self.store = new
-                    self.undo.clear()
-                    self._takes.clear()
-                    self.jobs.clear()
-                    self._parts_cache = None
-                    self.load_rows(force=True)                     # вставки проекта встают в ряд, правки ищут свои фразы
-                    self.save("загружен проект", {"file": f.name, "count": len(new["segs"])})
+                    try:
+                        self.load_rows(force=True, strict=True)     # без промежуточной записи reanchor
+                        self.undo.clear()
+                        self._takes.clear()
+                        self.jobs.clear()
+                        self._parts_cache = None
+                        self.save("загружен проект", {"file": f.name, "count": len(new["segs"])})
+                    except Exception:
+                        # save() сначала атомарно заменяет edits.json, а затем пишет только журнал/UI.
+                        # Если исключение случилось после замены, новое состояние уже является durable commit.
+                        try:
+                            committed = (self.dir / "edits.json").read_text(encoding="utf-8") == json.dumps(
+                                self.store, ensure_ascii=False, indent=1)
+                        except Exception:
+                            committed = False
+                        if not committed:
+                            self.store = old_store
+                            for key, value in old_rows.items():
+                                if value is missing:
+                                    self.__dict__.pop(key, None)
+                                else:
+                                    setattr(self, key, value)
+                            self.undo, self._takes, self.jobs = old_undo, old_takes, old_jobs
+                            self._parts_cache = old_parts_cache
+                            raise
+                        log("проект сохранён, но не все служебные записи обновились:\\n" + traceback.format_exc(), "warn")
                     lost = len(self.store["orphans"]) - orph0
                     if snd_add:
-                        idx = self.sound_index()
-                        add = {k: v for k, v in snd_add.items() if k not in idx and (self.sounds_dir / k).exists()}
-                        if add:
-                            idx.update(add)
-                            write_atomic(self.sounds_dir / "index.json", jd(idx))
+                        try:
+                            idx = self.sound_index()
+                            add = {k: v for k, v in snd_add.items() if k not in idx and (self.sounds_dir / k).exists()}
+                            if add:
+                                idx.update(add)
+                                write_atomic(self.sounds_dir / "index.json", jd(idx))
+                        except Exception:
+                            log("проект загружен, но библиотека звуков обновлена не полностью:\\n" + traceback.format_exc(), "warn")
                     if pst:
-                        cur_st = self.stress_load()
-                        fresh = {u: v for u, v in pst.items() if u not in cur_st}
-                        if fresh:
-                            cur_st.update(fresh)
-                            write_atomic(self.dir / "stress.json", jd(cur_st))
+                        stress_before = None if self.stress is None else dict(self.stress)
+                        try:
+                            cur_st = self.stress_load()
+                            fresh = {u: v for u, v in pst.items() if u not in cur_st}
+                            if fresh:
+                                cur_st.update(fresh)
+                                write_atomic(self.dir / "stress.json", jd(cur_st))
+                        except Exception:
+                            # stress_load() кеширует словарь; при неудачной записи не оставляем
+                            # в памяти импорт, которого нет на диске.
+                            self.stress = stress_before
+                            log("проект загружен, но словарь ударений обновлён не полностью:\\n" + traceback.format_exc(), "warn")
                     counts = self.project_counts(self.store)
                 op.note = (f"правок фраз {counts['edits']}, вставок {counts['ins']}; записей добавлено {stat['added']}, уже было {stat['have']}"
                            + (f", из корзины {stat['trash']}" if stat["trash"] else "")
@@ -6318,6 +6847,11 @@ class Studio:
         run = time.time() - self._auto_t0 if self._auto_t0 else 0.0
         made = lk - self._auto_rows0
         eta = round(run / made * (total - lk)) if (self._auto_t0 and made > 0 and run > 120) else None
+        parts_done = bool(pl) and pl[-1]["b"] >= len(self.rows) - 1 and all(
+            p["opened"] and self.store["parts"][p["n"] - 1].get("locked") for p in pl)
+        # Полная книга считается готовой только после проверки конечных файлов глав.
+        # Иначе повторный запуск ошибочно блокируется, хотя экспорт главы мог не состояться.
+        chapters_pending = self.chapters_due() if parts_done else []
         return dict(state=a["state"], step=a.get("step") or "", part=int(a.get("part") or 0), err=a.get("err") or "",
                     sound=bool(a.get("sound", True)), pct=round(100 * lk / total, 1),
                     locked=sum(1 for p in pl if p["opened"] and self.store["parts"][p["n"] - 1].get("locked")),
@@ -6327,8 +6861,7 @@ class Studio:
                     kit=self.kit_score() is not None, since=a.get("since") or "", ch_busy=self.ch_busy,
                     stamp=a.get("stamp") or "", disk=self.disk_dir(False),
                     vars=[dict(id=v[0], name=v[3], on=bool((self.store["mix"].get("vars") or {}).get(v[0], True))) for v in MIX_VARS],
-                    done=bool(pl) and pl[-1]["b"] >= len(self.rows) - 1 and all(
-                        p["opened"] and self.store["parts"][p["n"] - 1].get("locked") for p in pl))
+                    parts_done=parts_done, done=parts_done and not chapters_pending)
 
     def _auto_set(self, say=True, **kw):
         with self.lock:
@@ -6460,7 +6993,20 @@ class Studio:
             return True
         if whole:
             self._auto_chapters(final=True)
+            # Не превращаем явную паузу в завершение, если автор остановил автомат во время
+            # последней сборки глав.
+            if not self.auto_on():
+                return False
+            pending_chapters = self.chapters_due()
+            if pending_chapters:
+                labels = ", ".join(map(str, pending_chapters[:20]))
+                if len(pending_chapters) > 20:
+                    labels += "…"
+                raise Oops("все части озвучены и закреплены, но главы не собраны или устарели: "
+                           + labels + ". Проверьте журнал и после устранения причины нажмите «Вся книга» → «Продолжить»")
             k = self.disk_sync()
+            if not self.auto_on():
+                return False
             if k:
                 log(f"на Яндекс Диск досланы готовые файлы: {k}", "ok", "книга")
             with self.lock:
@@ -6935,6 +7481,11 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/ping":
             S.last_ping, S.bye_at = time.time(), None
             return self._json({"ok": True, "root": str(S.root), "ver": VERSION})
+        if p == "/api/book_text":
+            return self._json(S.book_text_view(
+                int(q.get("ch", 0)), int(q.get("offset", 0)), int(q.get("limit", 50)),
+                q.get("q", ""), q.get("conf", ""), q.get("role", "")
+            ))
         if p == "/api/state":
             return self._json(S.state_view())
         if p == "/api/part":
@@ -7072,6 +7623,33 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/bye":
             S.bye_at = time.time() + 8
             return self._json({"ok": True})
+        if p == "/api/book_text_edit":
+            uid = str(d.get("uid") or "")
+            if uid not in S.idx_of:
+                raise Oops("фраза не найдена в текущей редакции книги")
+            if d.get("reset"):
+                changes = {"tech": None, "role": None}
+            else:
+                changes = {}
+                if "tech" in d:
+                    tech = d.get("tech")
+                    if not isinstance(tech, str) or not tech.strip():
+                        raise Oops("текст для озвучки не должен быть пустым")
+                    if len(tech) > 6000:
+                        raise Oops("текст одной фразы слишком длинный (максимум 6000 знаков)")
+                    changes["tech"] = tech
+                if "role" in d:
+                    role = d.get("role")
+                    if not isinstance(role, str):
+                        raise Oops("роль должна быть строкой")
+                    role = role.strip()
+                    if role and role not in S.roles["roles"]:
+                        raise Oops("такой роли нет в roles.json")
+                    changes["role"] = role or None
+            if not changes:
+                raise Oops("нет изменений для сохранения")
+            S.set_seg(uid, changes)
+            return self._json({"ok": True, "uid": uid})
         if p == "/api/seg":
             S.set_seg(d["uid"], d.get("set") or {})
         elif p == "/api/synth":
@@ -7520,12 +8098,32 @@ ICON_B64 = (
 )
 
 
+def safe_idle_watch(st: Studio):
+    """Safe editor-only session monitor: no job polling, engine startup or housekeeping."""
+    while True:
+        try:
+            idle = time.time() - st.last_ping
+            st.strikes = st.strikes + 1 if idle > 45 * 60 else 0
+            if (st.bye_at and time.time() > st.bye_at and idle > 12) or st.strikes > 180:
+                log("окно безопасной Studio закрыто — завершаю сервер без фоновых задач")
+                try:
+                    (st.dir / "studio.lock").unlink()
+                except OSError:
+                    pass
+                os._exit(0)
+        except Exception:
+            log("сбой контроля безопасной сессии:\\n" + traceback.format_exc(), "warn")
+        time.sleep(0.5)
+
+
 def main():
     global n, np, S, LOG, LOG_IS_STDOUT
     ap = argparse.ArgumentParser(description="Нокс Студия — ручная правка аудиокниги")
     ap.add_argument("--root", default=r"D:\kniga1a", help="папка книги")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-open", action="store_true", help="не открывать окно (для проверки)")
+    ap.add_argument("--safe-start", action="store_true",
+                    help="открыть редактор без фоновых задач, автообслуживания и запуска движка")
     ap.add_argument("--icon", help="только записать значок приложения в этот файл и выйти")
     a = ap.parse_args()
     if a.icon:
@@ -7559,6 +8157,11 @@ def main():
             open_window(f"http://127.0.0.1:{alive[0]}/", profile)
         return
     if alive:                                                  # работает прежняя версия — она уступает место новой
+        if a.safe_start:
+            log(f"безопасный запуск: уже работает Studio версии {alive[1] or '?'}, второй процесс не запускаю и старый не завершаю", "warn")
+            if not a.no_open:
+                open_window(f"http://127.0.0.1:{alive[0]}/", profile)
+            return
         done = stop_instance(alive[2])
         log(f"работала студия версии {alive[1] or '?'} — " + ("остановлена, запускается " + VERSION if done else
             "остановить не удалось: закройте её окно и запустите студию ещё раз"), None if done else "warn")
@@ -7590,10 +8193,15 @@ def main():
         if srv is None:
             raise Oops("не нашлось свободного порта 8765–8784")
         write_atomic(root / "studio" / "studio.lock", jd({"pid": os.getpid(), "port": srv.server_address[1], "at": now()}))
-        threading.Thread(target=S.tick, daemon=True).start()
+        if a.safe_start:
+            threading.Thread(target=safe_idle_watch, args=(S,), daemon=True).start()
+            log("безопасный запуск: фоновые задачи, автообслуживание и автоматический запуск движка отключены", "warn")
+        else:
+            threading.Thread(target=S.tick, daemon=True).start()
         url = f"http://127.0.0.1:{srv.server_address[1]}/"
         log(f"Нокс Студия {VERSION}: {root} — {url} (этап конвейера {getattr(n, 'NOX_STAGE', '?')}; сборка {S.asm_src})")
-        threading.Thread(target=S.startup, daemon=True).start()
+        if not a.safe_start:
+            threading.Thread(target=S.startup, daemon=True).start()
         if not a.no_open:
             open_window(url, profile)
         srv.serve_forever()
