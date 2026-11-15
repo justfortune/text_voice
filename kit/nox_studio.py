@@ -8098,12 +8098,32 @@ ICON_B64 = (
 )
 
 
+def safe_idle_watch(st: Studio):
+    """Safe editor-only session monitor: no job polling, engine startup or housekeeping."""
+    while True:
+        try:
+            idle = time.time() - st.last_ping
+            st.strikes = st.strikes + 1 if idle > 45 * 60 else 0
+            if (st.bye_at and time.time() > st.bye_at and idle > 12) or st.strikes > 180:
+                log("окно безопасной Studio закрыто — завершаю сервер без фоновых задач")
+                try:
+                    (st.dir / "studio.lock").unlink()
+                except OSError:
+                    pass
+                os._exit(0)
+        except Exception:
+            log("сбой контроля безопасной сессии:\\n" + traceback.format_exc(), "warn")
+        time.sleep(0.5)
+
+
 def main():
     global n, np, S, LOG, LOG_IS_STDOUT
     ap = argparse.ArgumentParser(description="Нокс Студия — ручная правка аудиокниги")
     ap.add_argument("--root", default=r"D:\kniga1a", help="папка книги")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-open", action="store_true", help="не открывать окно (для проверки)")
+    ap.add_argument("--safe-start", action="store_true",
+                    help="открыть редактор без фоновых задач, автообслуживания и запуска движка")
     ap.add_argument("--icon", help="только записать значок приложения в этот файл и выйти")
     a = ap.parse_args()
     if a.icon:
@@ -8137,6 +8157,11 @@ def main():
             open_window(f"http://127.0.0.1:{alive[0]}/", profile)
         return
     if alive:                                                  # работает прежняя версия — она уступает место новой
+        if a.safe_start:
+            log(f"безопасный запуск: уже работает Studio версии {alive[1] or '?'}, второй процесс не запускаю и старый не завершаю", "warn")
+            if not a.no_open:
+                open_window(f"http://127.0.0.1:{alive[0]}/", profile)
+            return
         done = stop_instance(alive[2])
         log(f"работала студия версии {alive[1] or '?'} — " + ("остановлена, запускается " + VERSION if done else
             "остановить не удалось: закройте её окно и запустите студию ещё раз"), None if done else "warn")
@@ -8168,10 +8193,15 @@ def main():
         if srv is None:
             raise Oops("не нашлось свободного порта 8765–8784")
         write_atomic(root / "studio" / "studio.lock", jd({"pid": os.getpid(), "port": srv.server_address[1], "at": now()}))
-        threading.Thread(target=S.tick, daemon=True).start()
+        if a.safe_start:
+            threading.Thread(target=safe_idle_watch, args=(S,), daemon=True).start()
+            log("безопасный запуск: фоновые задачи, автообслуживание и автоматический запуск движка отключены", "warn")
+        else:
+            threading.Thread(target=S.tick, daemon=True).start()
         url = f"http://127.0.0.1:{srv.server_address[1]}/"
         log(f"Нокс Студия {VERSION}: {root} — {url} (этап конвейера {getattr(n, 'NOX_STAGE', '?')}; сборка {S.asm_src})")
-        threading.Thread(target=S.startup, daemon=True).start()
+        if not a.safe_start:
+            threading.Thread(target=S.startup, daemon=True).start()
         if not a.no_open:
             open_window(url, profile)
         srv.serve_forever()
