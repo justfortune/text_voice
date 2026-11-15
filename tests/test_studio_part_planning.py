@@ -459,6 +459,8 @@ class CrossPartSynchronizationTests(unittest.TestCase):
             s.title = "Book"
             s.rows = [{"ch_title": "Chapter"}]
             s.uids = ["same-boundary.0"]
+            s._parts_cache = None
+            s.plan = lambda: [{"n": 1, "a": 0, "b": 0, "opened": True}]
             s.open_part = lambda _k: {"a": 0, "b": 0}
             timeline_calls = []
 
