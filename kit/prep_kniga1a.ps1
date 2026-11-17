@@ -99,6 +99,109 @@ from pathlib import Path
 p = Path(sys.argv[1] if len(sys.argv) > 1 else "nox_audiobook.py")
 s = p.read_text(encoding="utf-8")
 
+# ---- NOX_BASE_B12: базовые страховки (идемпотентно; на уже обновлённой базе ничего не делает) ----
+if "def part_source_seconds(" not in s:
+    _a = s.index("def trim_silence(wav, sr, thresh_db=-42.0, pad_ms=60):")
+    _b = s.index("WORD_DICT_PATH = WORK", _a)
+    s = s[:_a] + r'''def trim_silence(wav, sr, thresh_db=-48.0, pad_ms=60, tail_pad_ms=220):
+    """Срезает тишину по краям. Порог — относительно пика фразы (тихие затухающие
+    окончания не режутся), в конце оставляем увеличенный запас tail_pad_ms."""
+    import numpy as np
+    x = np.asarray(wav, dtype="float32")
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    if len(x) == 0:
+        return x
+    peak = float(np.max(np.abs(x)))
+    if not math.isfinite(peak) or peak <= 0.0:
+        return x
+    amp = peak * (10 ** (thresh_db / 20))
+    idx = np.where(np.abs(x) > amp)[0]
+    if len(idx) == 0:
+        return x
+    start_pad = int(sr * pad_ms / 1000)
+    end_pad = int(sr * tail_pad_ms / 1000)
+    a, b = max(0, idx[0] - start_pad), min(len(x), idx[-1] + end_pad + 1)
+    return x[a:b]
+
+
+def part_source_seconds(minutes: float, speed: float = 1.0) -> float:
+    """Исходная длительность аудио, соответствующая заданной длительности после atempo."""
+    try:
+        minutes, speed = float(minutes), float(speed)
+    except (TypeError, ValueError):
+        raise ValueError("длительность части и скорость должны быть числами")
+    if not math.isfinite(minutes) or minutes <= 0:
+        raise ValueError("длительность части должна быть положительным конечным числом минут")
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError("скорость сборки должна быть положительным конечным числом")
+    return minutes * 60.0 * speed
+
+
+''' + s[_b:]
+    if "\nimport math\n" not in s:
+        s = s.replace("import json\nimport os\n", "import json\nimport math\nimport os\n", 1)
+    _c = s.index("def chunk_text(")
+    _old = "    if cur:\n        chunks.append(cur)\n    return chunks\n"
+    _d = s.index(_old, _c)
+    s = s[:_d] + "    if cur:\n        chunks.append(cur)\n" + r'''    # Страховка: кусок без запятых и длиннее max_chars*1.5 дробим по словам (обычные куски не трогаем).
+    limit = int(max_chars * 1.5)
+    safe = []
+    for c in chunks:
+        if len(c) <= limit:
+            safe.append(c)
+            continue
+        cur2 = ""
+        for w in re.findall(r"\S+", c):
+            while len(w) > limit:
+                if cur2:
+                    safe.append(cur2)
+                    cur2 = ""
+                safe.append(w[:limit])
+                w = w[limit:]
+            if cur2 and len(cur2) + 1 + len(w) > max_chars:
+                safe.append(cur2)
+                cur2 = w
+            else:
+                cur2 = (cur2 + " " + w).strip()
+        if cur2:
+            safe.append(cur2)
+    return safe
+''' + s[_d + len(_old):]
+    print("база: добавлены part_source_seconds, мягкая trim_silence, страховка chunk_text")
+
+# ---- NOX_CHUNK_ORDER: длинное предложение после короткого не должно переставлять фразы местами ----
+if "NOX_CHUNK_ORDER" not in s:
+    _o1 = r'''            # режем по запятым/точкам с запятой
+            piece = ""
+'''
+    _n1 = r'''            # режем по запятым/точкам с запятой (NOX_CHUNK_ORDER: сначала сбросить накопленное, иначе порядок фраз ломается)
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            piece = ""
+'''
+    _o2 = r'''            if piece:
+                if cur and len(cur) + len(piece) + 1 <= max_chars:
+                    cur = cur + " " + piece
+                else:
+                    if cur:
+                        chunks.append(cur)
+                    cur = piece
+            continue
+'''
+    _n2 = r'''            if piece:
+                cur = piece
+            continue
+'''
+    if s.count(_o1) == 1 and s.count(_o2) == 1:
+        s = s.replace(_o1, _n1).replace(_o2, _n2)
+        print("база: исправлен порядок фраз при делении длинных предложений (chunk_text)")
+    else:
+        print("!! chunk_text в базе не совпал с ожидаемым — порядок фраз НЕ исправлен")
+
+
+
 
 EDITS = [
 (
@@ -727,7 +830,7 @@ if "NOX_ASM_V2" not in s:
     )
     s = s[:a_start] + new_asm + s[a_end:]
     # планирование частей — в минутах ВЫХОДА (с учётом темпа)
-    s = s.replace("        if acc >= minutes * 60 and boundary_ok:", "        if acc >= minutes * 60 * max(TEMPO_G, 1.0) and boundary_ok:", 1)
+    s = s.replace("        if acc >= minutes * 60 and boundary_ok:", "        if acc >= part_source_seconds(minutes, speed) and boundary_ok:", 1)
     # CLI: --tempo / --no-equalize у build и watch; установка глобалей после разбора аргументов
     s = s.replace('    w.add_argument("--speed", type=float, default=1.0, help="тот же смысл, что у build --speed")\n',
                   '    w.add_argument("--speed", type=float, default=1.0, help="тот же смысл, что у build --speed")\n'
@@ -2064,6 +2167,11 @@ def _asr_gate():
     # проверка распознаванием включена и проверяльщик жив (его сердцебиение не старше 10 минут)
     if not SETTINGS.get("asr_check"):
         return False
+    # Последовательный режим — автор слушает часть и принимает её вручную.
+    # ASR блокирует готовность только в автоматическом режиме «Вся книга».
+    _mode = globals().get("by_parts")
+    if callable(_mode) and _mode():
+        return False
     if _okv_req():          # NOX_PT_V20: проверка этой книги запущена — сборка ждёт её с первой минуты, даже пока она грузится
         return True
 ''', "_asr_gate")
@@ -2404,7 +2512,7 @@ def work_window(rows, roles):
     except Exception:
         pass
     md = run_mode()
-    target = float(md.get("part_sec") or float(SETTINGS.get("part_min", 19) or 19) * 60 * max(TEMPO_G, 1.0))
+    target = float(md.get("part_sec") or part_source_seconds(float(SETTINGS.get("part_min", 19) or 19), 1.0))
     cache = load_durations()
     # Длина ещё не озвученной реплики оценивается по уже озвученным: d = a + буквы / темп (у каждой записи есть «хвосты»,
     # поэтому короткие реплики идут медленнее длинных). Оценка берётся с запасом в большую сторону (+25 %): окно может
@@ -2460,7 +2568,7 @@ def work_window(rows, roles):
     return i0, len(rows) - 1, num, False
 
 
-def plan_parts(rows, roles, minutes: float, upto=None):
+def plan_parts(rows, roles, minutes: float, upto=None, speed: float=1.0):
     """-> (parts, complete). parts: список (start_idx, end_idx_incl, closed). Границы уже собранных частей
     заморожены в work/parts.json, чтобы номера частей не «ехали» между запусками.
     NOX_PT_V21: закреплённые автором части — в начале цепочки, их записи не проверяются; upto — дальше этой реплики
@@ -2511,7 +2619,7 @@ def plan_parts(rows, roles, minutes: float, upto=None):
     """Собирает закрытые части, которых нет в parts/ ИЛИ в которых переозвучена реплика (NOX_PT_V13).
     Часть, где запись ещё на переозвучке/проверке, ждёт (прежняя версия остаётся) — дыр в частях не бывает.
     NOX_PT_V21: закреплённые автором части не собираются; only=N — собирать только часть N (режим «по частям»)."""
-    parts, ready, complete = plan_parts(rows, roles, minutes, upto)
+    parts, ready, complete = plan_parts(rows, roles, minutes, upto, speed=speed)
     _nfx = len(fixed_prefix(rows))
 ''', "build_parts: начало")
     _rep21('''        entry = {"n": n, "start": wav_for(rows[a], roles).stem, "end": wav_for(rows[b], roles).stem,

@@ -527,6 +527,51 @@ def probe_dur(ff, path):
 
 
 # ------------------------------------------------------------------------------------------------ партитура -> дорожки
+def remap_cue_chapters(rows, cues, ch_label, norm):
+    """NOX_CUES_REMAP: книга правилась — главы перенумерованы (старая VI стала VII и т.д.), а отметки партитуры
+    привязаны к номеру главы. Для отметки, чей якорь не найден в «своей» главе, ищем его в главах книги по порядку
+    (начиная с последней найденной, потом раньше) и подставляем нынешний номер главы. Партитура на диске не меняется.
+    -> (сколько отметок перепривязано, сколько якорей нет нигде)."""
+    order, texts = [], {}
+    for r in rows:
+        lab = ch_label(r["ch_title"])
+        if lab:
+            if lab not in texts:
+                order.append(lab)
+                texts[lab] = []
+            texts[lab].append(r["text"])
+    texts = {k: norm(" ".join(v)) for k, v in texts.items()}
+    pos = {k: i for i, k in enumerate(order)}
+    cur, moved, lost = 0, 0, 0
+    for c in cues:
+        ch = c.get("chapter", "")
+        if ch.startswith("ЧАСТЬ"):
+            continue
+        key = norm(c.get("anchor", ""))
+        if not key:
+            continue
+        k60, k30 = key[:60], key[:30]
+        t = texts.get(ch)
+        if t is not None and (k60 in t or k30 in t):
+            cur = max(cur, pos[ch]) if pos[ch] >= cur - 3 else cur
+            continue
+        found = None
+        for probe in (k60, k30):
+            for lab in order[cur:] + order[:cur][::-1]:
+                if probe in texts[lab]:
+                    found = lab
+                    break
+            if found:
+                break
+        if found is None:
+            lost += 1
+            continue
+        c["chapter"] = found
+        cur = pos[found]
+        moved += 1
+    return moved, lost
+
+
 def build_timeline(rows, starts, cues, kit, music_dur, a, nofile=None):
     """Отметки партитуры -> предметы дорожек в ОБЩЕМ времени книги: dict(kind, file, start, end, offset, loop, gain,
     fade_in, fade_out, note, cid). starts: индекс реплики -> (начало, конец) в общем времени (только собранные).
@@ -554,6 +599,12 @@ def build_timeline(rows, starts, cues, kit, music_dur, a, nofile=None):
             by_ch.setdefault(lab, []).append(i)
         if r["kind"] == "head" and part_no(r["text"]):
             heads[f"ЧАСТЬ {part_no(r['text'])}"] = i
+    try:
+        _mv, _ls = remap_cue_chapters(rows, cues, ch_label, loose)
+        if _mv:
+            print(f"  партитура: книга правилась — отметок перепривязано к новым главам: {_mv}, якорей нет нигде: {_ls}", flush=True)
+    except Exception as _e:
+        print(f"  партитура: перепривязка глав не удалась ({_e}) — отметки как есть", flush=True)
     texts = {}
 
     def ch_text(lab):

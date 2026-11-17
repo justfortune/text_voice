@@ -578,7 +578,7 @@ def main():
         except OSError:
             return False
 
-    if not todo and not asr_alive() and not args.serve:
+    if not todo and (BP or not asr_alive()) and not args.serve:
         print(tag, "все сегменты уже озвучены")
         return
     order = [r for i, r in enumerate(rows) if i not in fxs]
@@ -587,7 +587,7 @@ def main():
     print(f"{tag} " + (f"режим «по частям»: работаю только над первой незакреплённой частью и после неё останавливаюсь "
                        f"(во всей книге не озвучено {len(todo)} из {total_all})" if BP else f"осталось {len(todo)}/{total_all} сегментов")
           + (f" (закреплено автором и не трогается: {len(fxs)})" if fxs else "")
-          + ("; проверка распознаванием включена — отбракованное переозвучиваю сам" if asr_alive() else ""), flush=True)
+          + ("; проверка распознаванием включена — отбракованное переозвучиваю сам" if asr_alive() and not BP else ""), flush=True)
 
     state = {"model": None}
     stems = n.voice_stems(roles)
@@ -786,7 +786,16 @@ def main():
                     cnt["retries"] += 1
                     with retry_log.open("a", encoding="utf-8") as f:
                         f.write(f"{r['id']}\tпопытка {attempt + 1}: {', '.join(why)}\t{r['text'][:80]}\n")
-                (score, x, raw, why, text) = best           # что прочитано в лучшей попытке — то и в .txt для проверки
+                (score, x, raw, why, text) = best
+                critical = [w for w in why if w == "лимит" or w == "обрыв"
+                            or w.startswith(("обрублен конец", "оборвана гласная", "мало речи", "нет речи", "быстро"))]
+                if critical:
+                    with failed_log.open("a", encoding="utf-8") as f:
+                        f.write(f"{r['id']}\\tнеполная/сомнительная запись после {attempts} попыток: "
+                                f"{', '.join(critical)}\\t{r['text'][:80]}\\n")
+                    with susp_log.open("a", encoding="utf-8") as f:
+                        f.write(f"{r['id']}\\tНЕ ПРИНЯТА: {', '.join(critical)}\\t{r['text'][:80]}\\n")
+                    return "fail"                         # не превращаем заведомый обрыв в готовый WAV           # что прочитано в лучшей попытке — то и в .txt для проверки
                 if why:
                     with susp_log.open("a", encoding="utf-8") as f:
                         f.write(f"{r['id']}\tпосле {attempts} попыток: {', '.join(why)}\t{r['text'][:80]}\n")
@@ -947,13 +956,13 @@ def main():
                         prompts_ref_xv[rkey] = model.model.create_voice_clone_prompt(
                             ref_audio=padded_ref(rw, ref_sil), ref_text="", x_vector_only_mode=True)
                     x, sr, raw, hit, ins = synth_text(model, t_use, prompts_ref_xv[rkey] if st_["xv"] else prompts_ref[rkey],
-                                                      cap, nonstream=st_["ns"], suffix=tail_sfx, split=split_sent,
+                                                      cap, nonstream=st_["ns"], suffix=tail_sfx, split=split_sent and not bool(req.get("atomic")),
                                                       pause_s=sent_pause, min_letters=split_min,
                                                       ref_hz=ref_f0(rw) if vguard else None, role="проба:" + rw.stem,
                                                       info=vinfo)
                 else:
                     x, sr, raw, hit, ins = synth_text(model, t_use, prompt_xv(role) if st_["xv"] else prompt_for(role), cap,
-                                                      nonstream=st_["ns"], suffix=tail_sfx, split=split_sent,
+                                                      nonstream=st_["ns"], suffix=tail_sfx, split=split_sent and not bool(req.get("atomic")),
                                                       pause_s=sent_pause, min_letters=split_min, ref_hz=ref_hz_for(role),
                                                       role=role, info=vinfo)
             except Exception as e_xv:
@@ -974,6 +983,11 @@ def main():
             if not why:
                 break
         score, x, why, met, st_, att, sr = best
+        critical = [w for w in why if w == "лимит" or w == "обрыв"
+                    or w.startswith(("обрублен конец", "оборвана гласная", "мало речи", "нет речи", "быстро"))]
+        if critical:
+            return dict(ok=False, error="запись не принята: " + ", ".join(critical), why=why,
+                        attempts=att, tried=done_k, role=role, text=text, worker=args.worker)
         how = ", ".join(w for w, on in (("голос по отпечатку образца", st_["xv"] and not xv),
                                         ("точка на конце", st_["dot"])) if on) if st_["extra"] else ""
         out = Path(str(req["out"]))
@@ -1144,7 +1158,7 @@ def main():
                       "(чаще всего у роли нет образца голоса) и запустите go ещё раз", flush=True)
                 return
             # всё в окне озвучено: идёт проверка и сборка; отбракованное вернётся сюда как «нет записи»
-            if time.time() - idle_t > 30 * 60 and not asr_alive():
+            if time.time() - idle_t > 30 * 60 and (BP or not asr_alive()):
                 print(f"{tag} часть {w[2]} не собрана за полчаса простоя (сборка nox_part.py не работает?) — выхожу", flush=True)
                 return
             for _ in range(10):

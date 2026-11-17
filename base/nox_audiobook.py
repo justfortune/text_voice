@@ -26,6 +26,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -167,7 +168,10 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS):
     chunks, cur = [], ""
     for s in split_sentences(text):
         if len(s) > max_chars * 1.5:
-            # режем по запятым/точкам с запятой
+            # режем по запятым/точкам с запятой (NOX_CHUNK_ORDER: сначала сбросить накопленное, иначе порядок фраз ломается)
+            if cur:
+                chunks.append(cur)
+                cur = ""
             piece = ""
             for frag in re.split(r"(?<=[,;:])\s+", s):
                 if piece and len(piece) + len(frag) + 1 > max_chars:
@@ -176,12 +180,7 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS):
                 else:
                     piece = (piece + " " + frag).strip()
             if piece:
-                if cur and len(cur) + len(piece) + 1 <= max_chars:
-                    cur = cur + " " + piece
-                else:
-                    if cur:
-                        chunks.append(cur)
-                    cur = piece
+                cur = piece
             continue
         if cur and len(cur) + len(s) + 1 > max_chars:
             chunks.append(cur)
@@ -190,7 +189,29 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS):
             cur = (cur + " " + s).strip()
     if cur:
         chunks.append(cur)
-    return chunks
+    # Страховка: кусок без запятых и длиннее max_chars*1.5 дробим по словам (обычные куски не трогаем).
+    limit = int(max_chars * 1.5)
+    safe = []
+    for c in chunks:
+        if len(c) <= limit:
+            safe.append(c)
+            continue
+        cur2 = ""
+        for w in re.findall(r"\S+", c):
+            while len(w) > limit:
+                if cur2:
+                    safe.append(cur2)
+                    cur2 = ""
+                safe.append(w[:limit])
+                w = w[limit:]
+            if cur2 and len(cur2) + 1 + len(w) > max_chars:
+                safe.append(cur2)
+                cur2 = w
+            else:
+                cur2 = (cur2 + " " + w).strip()
+        if cur2:
+            safe.append(cur2)
+    return safe
 
 
 def verb_gender(part: str):
@@ -636,18 +657,39 @@ def load_qwen(model_id: str, attn: str):
     return model
 
 
-def trim_silence(wav, sr, thresh_db=-42.0, pad_ms=60):
+def trim_silence(wav, sr, thresh_db=-48.0, pad_ms=60, tail_pad_ms=220):
+    """Срезает тишину по краям. Порог — относительно пика фразы (тихие затухающие
+    окончания не режутся), в конце оставляем увеличенный запас tail_pad_ms."""
     import numpy as np
     x = np.asarray(wav, dtype="float32")
     if x.ndim > 1:
         x = x.mean(axis=1)
-    amp = 10 ** (thresh_db / 20)
+    if len(x) == 0:
+        return x
+    peak = float(np.max(np.abs(x)))
+    if not math.isfinite(peak) or peak <= 0.0:
+        return x
+    amp = peak * (10 ** (thresh_db / 20))
     idx = np.where(np.abs(x) > amp)[0]
     if len(idx) == 0:
         return x
-    pad = int(sr * pad_ms / 1000)
-    a, b = max(0, idx[0] - pad), min(len(x), idx[-1] + pad)
+    start_pad = int(sr * pad_ms / 1000)
+    end_pad = int(sr * tail_pad_ms / 1000)
+    a, b = max(0, idx[0] - start_pad), min(len(x), idx[-1] + end_pad + 1)
     return x[a:b]
+
+
+def part_source_seconds(minutes: float, speed: float = 1.0) -> float:
+    """Исходная длительность аудио, соответствующая заданной длительности после atempo."""
+    try:
+        minutes, speed = float(minutes), float(speed)
+    except (TypeError, ValueError):
+        raise ValueError("длительность части и скорость должны быть числами")
+    if not math.isfinite(minutes) or minutes <= 0:
+        raise ValueError("длительность части должна быть положительным конечным числом минут")
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError("скорость сборки должна быть положительным конечным числом")
+    return minutes * 60.0 * speed
 
 
 WORD_DICT_PATH = WORK / "accent_dict.csv"

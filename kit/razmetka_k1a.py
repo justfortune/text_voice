@@ -176,13 +176,33 @@ def mmss(v):
     return f"{int(v // 60):02d}:{v % 60:04.1f}"
 
 
+_REJ_CACHE = {}
+
+
+def _rej_stems(d: Path) -> set:
+    """Один проход по папке вместо glob на каждую реплику (на большой книге это были часы)."""
+    key = str(d)
+    if key not in _REJ_CACHE:
+        stems = set()
+        try:
+            for e in os.scandir(d):
+                nm = e.name
+                i = nm.find(".rej")
+                if i > 0 and nm.endswith(".wav"):
+                    stems.add(nm[:i])
+        except OSError:
+            pass
+        _REJ_CACHE[key] = stems
+    return _REJ_CACHE[key]
+
+
 def seg_state(p: Path):
     """-> (состояние, высота голоса к образцу или None, чужих кусков у сторожа, способ)."""
     vx, alien, method = None, 0, ""
     try:
         st_ = p.stat()
     except OSError:
-        if any(p.parent.glob(p.stem + ".rej*.wav")):
+        if p.stem in _rej_stems(p.parent):
             return "на переозвучке", None, 0, ""
         return "нет записи", None, 0, ""
     state = "озвучено, не проверено"
@@ -206,6 +226,51 @@ def seg_state(p: Path):
     return state, vx, alien, method
 
 
+def remap_cue_chapters(rows, cues, ch_label, norm):
+    """NOX_CUES_REMAP: книга правилась — главы перенумерованы (старая VI стала VII и т.д.), а отметки партитуры
+    привязаны к номеру главы. Для отметки, чей якорь не найден в «своей» главе, ищем его в главах книги по порядку
+    (начиная с последней найденной, потом раньше) и подставляем нынешний номер главы. Партитура на диске не меняется.
+    -> (сколько отметок перепривязано, сколько якорей нет нигде)."""
+    order, texts = [], {}
+    for r in rows:
+        lab = ch_label(r["ch_title"])
+        if lab:
+            if lab not in texts:
+                order.append(lab)
+                texts[lab] = []
+            texts[lab].append(r["text"])
+    texts = {k: norm(" ".join(v)) for k, v in texts.items()}
+    pos = {k: i for i, k in enumerate(order)}
+    cur, moved, lost = 0, 0, 0
+    for c in cues:
+        ch = c.get("chapter", "")
+        if ch.startswith("ЧАСТЬ"):
+            continue
+        key = norm(c.get("anchor", ""))
+        if not key:
+            continue
+        k60, k30 = key[:60], key[:30]
+        t = texts.get(ch)
+        if t is not None and (k60 in t or k30 in t):
+            cur = max(cur, pos[ch]) if pos[ch] >= cur - 3 else cur
+            continue
+        found = None
+        for probe in (k60, k30):
+            for lab in order[cur:] + order[:cur][::-1]:
+                if probe in texts[lab]:
+                    found = lab
+                    break
+            if found:
+                break
+        if found is None:
+            lost += 1
+            continue
+        c["chapter"] = found
+        cur = pos[found]
+        moved += 1
+    return moved, lost
+
+
 def place_cues(rows, cues, L, R):
     """Отметки партитуры -> вставки тегов {индекс реплики: [(позиция в тексте, тег)]} + список ненайденных."""
     by_ch, heads = {}, {}
@@ -218,6 +283,10 @@ def place_cues(rows, cues, L, R):
             if k:
                 heads[f"ЧАСТЬ {k}"] = i
     cache, ins, missed, cursor = {}, {}, [], {}
+    try:
+        remap_cue_chapters(rows, cues, ch_label, norm)
+    except Exception:
+        pass
 
     def chapter_text(lab):
         if lab not in cache:
@@ -267,6 +336,10 @@ def place_cues(rows, cues, L, R):
         p = text.find(key[:60], cur)
         if p < 0:
             p = text.find(key[:30], cur)
+        if p < 0 and key:                                 # якорь раньше курсора (порядок сбит правкой) — ищем с начала главы
+            p = text.find(key[:60])
+            if p < 0:
+                p = text.find(key[:30])
         if p < 0 or not key:
             missed.append(f"{c.get('id')}\t{ch}\tне найден якорь\t{c.get('anchor', '')[:70]}")
             continue

@@ -85,7 +85,7 @@ foreach ($sign in @("work", "studio", "gotovo", "book.docx", "nox_audiobook.py")
 if ((Test-Path -LiteralPath $Book) -and (Test-Path -LiteralPath $Dir) -and ((Resolve-Path -LiteralPath $Dir).Path -ieq (Resolve-Path -LiteralPath $Book).Path)) { Stop-Here "папка для публикации совпадает с папкой книги" }
 $zip = @(Get-ChildItem -LiteralPath $Downloads -Filter "nox_github_*.zip" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending) | Select-Object -First 1
 $need = @("README.md", ".gitignore", ".gitattributes", "kit/go_kniga1a.ps1", "kit/nox_studio.py", "kit/nox_studio.html", "tools/sborshchik_k1a.ps1", "base/nox_audiobook.py")
-$parts = @("kit", "tools", "base", "data")
+$parts = @("kit", "tools", "base", "data", "tests")
 if ($zip) {
     $tmpx = Join-Path ([IO.Path]::GetTempPath()) ("nox_gh_" + $stamp)
     try {

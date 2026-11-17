@@ -277,7 +277,8 @@ def main() -> int:
         return 0
 
     # режим работы — для воркеров и проверки: они берут из этого файла и сам режим, и длину части в секундах записи
-    mode = dict(by_parts=not a.all, minutes=minutes, part_sec=round(minutes * 60 * max(n.TEMPO_G, 1.0), 1),
+    mode = dict(by_parts=not a.all, minutes=minutes, speed=float(a.speed or 1.0),
+                part_sec=round(n.part_source_seconds(minutes, float(a.speed or 1.0)), 1),
                 at=time.strftime("%Y-%m-%d %H:%M:%S"))
     tmp = n.MODE_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(mode, ensure_ascii=False), encoding="utf-8")
