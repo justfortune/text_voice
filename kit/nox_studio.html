@@ -437,6 +437,8 @@ body.book-text-mode.book-no-audio #cv,body.book-text-mode.book-no-audio #mini,bo
       <button data-jf="all" class="on">Всё</button><button data-jf="imp" title="Только замечания и сбои">Важное</button><button data-jf="eng" title="Вывод движка озвучки и ход переозвучки">Движок</button><button data-jf="edit" title="Что вы меняли">Правки</button><button data-jf="chk" title="Строки самопроверки">Проверка</button>
       <span class="sp"></span>
       <button id="jCheck" title="Проверить заново: книга, записи, ffmpeg, голоса, движок, видеокарта, звуки, место на диске">Проверить всё</button>
+      <button id="jDup" title="Убрать невыбранные дубли и артефакты. Выбранные дубли и закреплённое не затрагиваются; убранное уходит в корзину студии (studio\\trash), правки копируются">Убрать дубли (с копией)</button>
+      <button id="jDup0" title="То же, но убранное стирается насовсем, без копии">Убрать дубли без копии</button>
       <button id="jClean" title="Удалить кэш студии. Он пересчитывается сам; правки, дубли и готовые файлы не затрагиваются">Очистить кэш</button>
       <button id="jOpenG" title="Открыть папку готовых частей и глав">Папка готового</button>
       <button id="jOpenS" title="Открыть папку студии: правки, дубли, файлы журналов">Папка студии</button>
@@ -2302,6 +2304,10 @@ for(const b of document.querySelectorAll("[data-jf]")) b.addEventListener("click
 $("#jCheck").onclick = async () => { try { await api("/api/selfcheck", {}); jFilter("chk"); pollLog(); } catch(e){ fail(e); } };
 $("#jClean").onclick = () => dialog('<h3>Очистить кэш студии?</h3><p>Кэш — это уже обработанные фразы и части, собранные для прослушивания. Сейчас он занимает ' + gbs(J.sys && J.sys.cache ? J.sys.cache.mb : null) + '. Студия пересчитает всё сама, когда понадобится: после очистки первое открытие каждой части займёт на несколько секунд больше.</p><p>Правки, дубли, закреплённые записи и готовые файлы не затрагиваются.</p>',
   [["Отмена"], ["Очистить", async () => { try { const r = await api("/api/clean", {}); toast(r.skipped ? "Сейчас идёт сборка — очистите кэш чуть позже." : "Кэш очищен: освободилось " + gbs(r.freed) + ".", r.skipped ? "" : "ok"); pollLog(); } catch(e){ fail(e); } }, "pri"]]);
+const cleanDup = (backup) => dialog('<h3>Убрать дубли и артефакты' + (backup ? ' (с копией)' : ' без копии') + '?</h3><p>Для каждой фразы остаётся выбранный дубль и закреплённая запись; невыбранные дубли, записи фраз, которых больше нет в книге, и корзина убираются. Кэш студии очищается заодно. Готовые файлы и правки текста не затрагиваются.</p><p>' + (backup ? 'Убранное не стирается: оно переносится в studio\\trash, а правки копируются в studio\\backup.' : 'Убранное стирается насовсем.') + '</p>',
+  [["Отмена"], ["Убрать", async () => { try { const r = await api("/api/clean_takes", {backup}); toast(r.skipped ? "Сейчас идёт сборка — повторите чуть позже." : "Убрано файлов: " + r.removed + ", освободилось " + gbs(r.freed) + ".", r.skipped ? "" : "ok"); pollLog(); } catch(e){ fail(e); } }, "pri"]]);
+$("#jDup").onclick = () => cleanDup(true);
+$("#jDup0").onclick = () => cleanDup(false);
 $("#jOpenG").onclick = () => openDir("gotovo");
 $("#jOpenS").onclick = () => openDir("studio");
 $("#jCopy").onclick = async () => {

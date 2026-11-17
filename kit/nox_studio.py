@@ -4907,6 +4907,85 @@ class Studio:
     # ------------------------------------------------------------------ уборка кэша
     CACHE_GB = (8.0, 4.0, 1.5)
 
+    def clean_takes(self, backup: bool = True) -> dict:
+        """Убрать дубли и артефакты: невыбранные записи студии (studio\\takes), записи без фразы и корзину.
+        Выбранный дубль каждой фразы, закреплённые записи и готовые файлы не трогаются. С копией (backup) убираемое
+        не стирается, а переносится в studio\\trash\\dubli_<дата>, а правки (edits.json) копируются в studio\\backup;
+        без копии — стирается насовсем. Потом очищается кэш студии (он пересчитывается сам)."""
+        self.auto_guard("очистка дублей и артефактов")
+        if not self.rlock.acquire(blocking=True, timeout=120):
+            return dict(skipped=True, removed=0, freed=0)
+        removed = freed = 0
+        where = ""
+        try:
+            with self.lock:
+                segs = self.store.get("segs") or {}
+                by_sid = {}
+                for e in list(segs.values()) + [o.get("e") or {} for o in (self.store.get("orphans") or [])]:
+                    if e.get("sid"):
+                        by_sid[e["sid"]] = jd(e)
+                rest = jd({k: v for k, v in self.store.items() if k not in ("segs", "orphans")})
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            if backup:
+                where = str(self.dir / "trash" / f"dubli_{stamp}")
+                try:
+                    self.backup_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(self.dir / "edits.json", self.backup_dir / f"edits_pered_chistkoy_{stamp}.json")
+                except OSError:
+                    log("копия правок перед очисткой дублей не сделана", "warn")
+            try:
+                dirs = [d for d in self.takes_dir.iterdir() if d.is_dir()]
+            except OSError:
+                dirs = []
+            for d in dirs:
+                text = by_sid.get(d.name)
+                for f in list(d.iterdir()):
+                    if not f.is_file():
+                        continue
+                    m = re.match(re.escape(d.name) + r"_(t\d+)\.(wav|json)$", f.name)
+                    if text is not None and m and (f'"{m.group(1)}"' in text or f'"{d.name}_{m.group(1)}"' in rest):
+                        continue                                     # выбранный, закреплённый или нужный правкам дубль
+                    if text is not None and not m:
+                        continue                                     # чужой служебный файл — не трогаем
+                    try:
+                        size = f.stat().st_size
+                        if backup:
+                            dst = Path(where) / d.name
+                            dst.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(f), str(dst / f.name))
+                        else:
+                            f.unlink()
+                        removed += 1
+                        freed += size
+                    except OSError:
+                        pass
+                try:
+                    d.rmdir()                                        # пустую папку фразы — прочь (непустая не удалится)
+                except OSError:
+                    pass
+            if not backup:
+                tr = self.dir / "trash"
+                if tr.is_dir():
+                    for x in list(tr.iterdir()):
+                        try:
+                            if x.is_dir():
+                                freed += sum(q.stat().st_size for q in x.rglob("*") if q.is_file())
+                                shutil.rmtree(x, ignore_errors=True)
+                            else:
+                                freed += x.stat().st_size
+                                x.unlink()
+                        except OSError:
+                            pass
+            self._takes = {}
+            log(f"дубли и артефакты: убрано файлов {removed}, освобождено {freed // 2 ** 20} МБ" + (f"; перенесено в {where}" if backup else "; насовсем"))
+        finally:
+            self.rlock.release()
+        try:
+            freed += int(self.housekeeping(everything=True).get("freed") or 0)
+        except Exception:
+            pass
+        return dict(removed=removed, freed=freed, backup=bool(backup), where=where)
+
     def housekeeping(self, everything: bool = False) -> dict:
         """Уборка кэша студии. Кэш — уже обработанные фразы (studio\\cache) и части, собранные для прослушивания
         (studio\\render): всё это студия в любой момент пересчитает из записей, удалять безопасно. Правки, дубли,
@@ -7741,6 +7820,8 @@ class H(BaseHTTPRequestHandler):
             return self._json({"ok": True})
         elif p == "/api/clean":
             return self._json(S.housekeeping(everything=True))
+        elif p == "/api/clean_takes":
+            return self._json(S.clean_takes(bool(d.get("backup", True))))
         elif p == "/api/stress":
             if S.stress_busy is None:
                 S.stress_run_at[k] = time.time()
