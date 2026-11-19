@@ -1,4 +1,4 @@
-﻿# NOX_KIT 2026-11-12a
+﻿# NOX_KIT 2026-11-18d
 # prep_kniga1a.ps1 — проект АУДИОРЕДАКЦИИ первой книги (полной) в папке D:\kniga1a.
 # Текущие папки (D:\nox_audiobook, D:\kniga2) не трогаются. GPU не нужен, ~1 минута.
 #
@@ -22,6 +22,7 @@ param(
     [string]$Dict = "",                                           # путь к accent_dict.csv (иначе ищется в Загрузках)
     [string]$FastPy = "",                                         # путь к nox_fast.py (иначе Src/Загрузки)
     [string]$Overrides = "",                                      # сценарий по ролям speaker_overrides.tsv (иначе ищется в Загрузках)
+    [string]$StressFixes = "",                                    # явный словарь ударений по месту
     [int]$MaxChars = 200,                                         # длина куска текста для озвучки (таблица настроек)
     [string]$SeedFrom = "",                                       # новая книга: роли и голоса взять из этой книги (D:\kniga1a)
     [string]$Title = ""                                           # название книги — проверка, что рукопись та самая
@@ -34,7 +35,36 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
 
 function Step($m) { Write-Host ""; Write-Host ("=== " + $m) -ForegroundColor Cyan }
 
+function Copy-NoxInput([string]$Source, [string]$Target) {
+    $sourcePath = [IO.Path]::GetFullPath($Source)
+    $targetPath = [IO.Path]::GetFullPath($Target)
+    if ($sourcePath -eq $targetPath) { return }
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) { throw "Нет входного файла: $sourcePath" }
+    $history = Join-Path $Root ('work\input_history\' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $history -Force | Out-Null
+    $oldHash = $null
+    if (Test-Path -LiteralPath $targetPath) {
+        $oldHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash
+        $saved = Join-Path $history ([IO.Path]::GetFileName($targetPath))
+        Copy-Item -LiteralPath $targetPath -Destination $saved -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $saved -Algorithm SHA256).Hash -ne $oldHash) { throw 'Не прошла проверка прежнего входного файла' }
+    }
+    $newHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
+    $incoming = $targetPath + '.incoming.' + [guid]::NewGuid().ToString('N')
+    try {
+        Copy-Item -LiteralPath $sourcePath -Destination $incoming -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $incoming -Algorithm SHA256).Hash -ne $newHash) { throw 'Не прошла проверка нового входного файла' }
+        @{ v=1; source=$sourcePath; target=$targetPath; before=$oldHash; after=$newHash } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $history 'manifest.json') -Encoding UTF8 -ErrorAction Stop
+        if (Test-Path -LiteralPath $targetPath) {
+            if ((Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash -ne $oldHash) { throw "Входной файл изменён параллельно: $targetPath" }
+            [IO.File]::Replace($incoming, $targetPath, $null)
+        } else { [IO.File]::Move($incoming, $targetPath) }
+    } finally { if (Test-Path -LiteralPath $incoming) { Remove-Item -LiteralPath $incoming -ErrorAction Stop } }
+}
+
 if (-not (Test-Path "$Src\nox_audiobook.py")) { Write-Host "Нет $Src" -ForegroundColor Red; exit 1 }
+if (-not $PSBoundParameters.ContainsKey('Docx') -and (Test-Path -LiteralPath "$Root\book.docx")) { $Docx = "$Root\book.docx" }
 if (-not (Test-Path -LiteralPath $Docx) -and (Test-Path "$Root\book.docx")) { $Docx = "$Root\book.docx" }   # рукопись уже в проекте
 if (-not (Test-Path -LiteralPath $Docx)) {
     Write-Host ("Нет рукописи: " + $Docx) -ForegroundColor Red
@@ -53,8 +83,12 @@ foreach ($d in @("env", "envfast", "hf", "pip_cache", "tools")) {
 
 Step "Конвейер, роли, голоса, словарь произношения"
 Copy-Item "$Src\nox_audiobook.py" "$Root\nox_audiobook.new.py" -Force      # правится копия; на место встаёт уже готовой
-if ($FastPy -and (Test-Path -LiteralPath $FastPy)) { Copy-Item -LiteralPath $FastPy "$Root\nox_fast.py" -Force }
-elseif (Test-Path "$Src\nox_fast.py") { Copy-Item "$Src\nox_fast.py" "$Root\nox_fast.py" -Force }
+if ($FastPy -and (Test-Path -LiteralPath $FastPy)) {
+    if ([IO.Path]::GetFullPath($FastPy) -ne [IO.Path]::GetFullPath("$Root\nox_fast.py")) { Copy-Item -LiteralPath $FastPy "$Root\nox_fast.py" -Force -ErrorAction Stop }
+}
+elseif (Test-Path "$Src\nox_fast.py") {
+    if ([IO.Path]::GetFullPath("$Src\nox_fast.py") -ne [IO.Path]::GetFullPath("$Root\nox_fast.py")) { Copy-Item "$Src\nox_fast.py" "$Root\nox_fast.py" -Force -ErrorAction Stop }
+}
 elseif (Test-Path "$env:USERPROFILE\Downloads\nox_fast.py") { Copy-Item "$env:USERPROFILE\Downloads\nox_fast.py" "$Root\nox_fast.py" -Force }
 $seed = $Src
 if ($SeedFrom -and (Test-Path "$SeedFrom\work\roles.json")) { $seed = $SeedFrom }   # вторая книга: голоса из аудиоредакции первой
@@ -62,10 +96,12 @@ if (-not (Test-Path "$Root\work\roles.json")) { Copy-Item "$seed\work\roles.json
 if (-not (Test-Path "$Root\work\voices")) { Copy-Item "$seed\work\voices" "$Root\work\voices" -Recurse; Write-Host ("  голоса взяты из " + $seed) }
 # ВНИМАНИЕ: в PowerShell $dict и параметр $Dict — одна и та же переменная (регистр не важен), а $Dict объявлен [string]:
 # найденный файл превращался в строку без пути, и словарь из Загрузок НЕ копировался. Отсюда отдельное имя $dictFile.
-if ($Dict -and (Test-Path -LiteralPath $Dict)) { $dictFile = Get-Item -LiteralPath $Dict }
+if ($Dict -and -not (Test-Path -LiteralPath $Dict)) { throw "Указанный словарь отсутствует: $Dict" }
+if ($Dict) { $dictFile = Get-Item -LiteralPath $Dict }
+elseif (Test-Path -LiteralPath "$Root\work\accent_dict.csv") { $dictFile = Get-Item -LiteralPath "$Root\work\accent_dict.csv" }
 else { $dictFile = Get-ChildItem "$env:USERPROFILE\Downloads\accent_dict*.csv" -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notlike "*draft*" } | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
-if ($dictFile) { Copy-Item -LiteralPath $dictFile.FullName "$Root\work\accent_dict.csv" -Force; Write-Host ("  словарь: " + $dictFile.FullName) }
+if ($dictFile) { Copy-NoxInput $dictFile.FullName "$Root\work\accent_dict.csv"; Write-Host ("  словарь: " + $dictFile.FullName) }
 elseif (-not (Test-Path "$Root\work\accent_dict.csv")) { Write-Host "  ВНИМАНИЕ: accent_dict.csv не найден в Загрузках!" -ForegroundColor Yellow }
 else { Write-Host "  accent_dict.csv в Загрузках нет — остаётся прежний словарь книги" -ForegroundColor Yellow }
 if (Test-Path "$Root\work\accent_dict.csv") {      # какая версия словаря реально работает (строка «# vN» в его шапке)
@@ -74,7 +110,9 @@ if (Test-Path "$Root\work\accent_dict.csv") {      # какая версия с�
 }
 $ovr = $null
 $leaf = (Split-Path $Root -Leaf).ToLower()
-if ($Overrides -and (Test-Path -LiteralPath $Overrides)) { $ovr = Get-Item -LiteralPath $Overrides }
+if ($Overrides -and -not (Test-Path -LiteralPath $Overrides)) { throw "Указанный сценарий отсутствует: $Overrides" }
+if ($Overrides) { $ovr = Get-Item -LiteralPath $Overrides }
+elseif (Test-Path -LiteralPath "$Root\work\speaker_overrides.tsv") { $ovr = Get-Item -LiteralPath "$Root\work\speaker_overrides.tsv" }
 else {
     # сценарий именно ЭТОЙ книги: первая строка «# book: kniga2a»; файлы без пометки — сценарий первой книги (kniga1a)
     foreach ($f in (Get-ChildItem "$env:USERPROFILE\Downloads\speaker_overrides*.tsv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)) {
@@ -83,10 +121,13 @@ else {
         if ($book -eq $leaf) { $ovr = $f; break }
     }
 }
-if ($ovr) { Copy-Item $ovr.FullName "$Root\work\speaker_overrides.tsv" -Force; Write-Host ("  сценарий по ролям: " + $ovr.FullName) }
+if ($ovr) { Copy-NoxInput $ovr.FullName "$Root\work\speaker_overrides.tsv"; Write-Host ("  сценарий по ролям: " + $ovr.FullName) }
 elseif (Test-Path "$Root\work\speaker_overrides.tsv") { Write-Host "  сценарий по ролям: уже в проекте (work\speaker_overrides.tsv)" }
-$sw = Get-ChildItem "$env:USERPROFILE\Downloads\stress_words*.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($sw) { Copy-Item $sw.FullName "$Root\work\stress_words.txt" -Force; Write-Host ("  слова с ударением по контексту: " + $sw.FullName) }
+$sw = $null
+if (Test-Path -LiteralPath "$Root\work\stress_words.txt") { $sw = Get-Item -LiteralPath "$Root\work\stress_words.txt" }
+else { $sw = Get-ChildItem "$env:USERPROFILE\Downloads\stress_words*.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
+if ($sw) { Copy-NoxInput $sw.FullName "$Root\work\stress_words.txt"; Write-Host ("  слова с ударением по контексту: " + $sw.FullName) }
+if ($StressFixes) { Copy-NoxInput $StressFixes "$Root\work\stress_fixes.tsv"; Write-Host ("  ударения по месту: " + $StressFixes) }
 Write-Host ("  голосов: " + (Get-ChildItem "$Root\work\voices\*.wav").Count)
 
 Step "Правки копии nox_audiobook.py (дефисы, оглавление, разрывы сцен, заголовки)"
@@ -2736,6 +2777,183 @@ def write_wav_atomic(path: Path, data, sr):
 """, "запись кэша длительностей")
     _rep21("NOX_STAGE = 20\n", "NOX_STAGE = 21\n", "NOX_STAGE 20")
 
+# NOX_PROTECTION_18D: retain the existing edition, never guess a missing UID.
+if 'NOX_PROTECTION_VERSION = "18d"' not in s:
+    _a, _b = s.index('def migrate_voice_keys('), s.index('\ndef wav_for(', s.index('def migrate_voice_keys('))
+    s = s[:_a] + '''def migrate_voice_keys(rows, roles) -> int:
+    """18d: legacy recordings are not relabelled as the current voice sample."""
+    if (WORK / "keys_v18.done").exists() or not WAVS.is_dir():
+        return 0
+    for row in rows:
+        old = WAVS / (seg_key(resolve_role(row["speaker"], roles), row["text"]) + ".wav")
+        if old.is_file() and old != wav_for(row, roles) and not wav_for(row, roles).exists():
+            raise RuntimeError("есть озвучка по прежней схеме имён без подтверждения образца голоса; "
+                               "автоматическая миграция остановлена, исходные WAV оставлены на месте")
+    return 0
+
+''' + s[_b:]
+    _a, _b = s.index('def chunk_text('), s.index('\ndef verb_gender(')
+    _body = s[_a:_b].replace('    chunks, cur = [], ""', '''    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1:
+        raise ValueError("max_chars должен быть положительным целым числом")
+    chunks, cur = [], ""''', 1)
+    if 'NOX_CHUNK_ORDER' not in _body:
+        raise RuntimeError("18d: исправление порядка chunk_text не подтверждено")
+    s = s[:_a] + _body + s[_b:]
+    _migration = '''    if CSV_PATH.exists() and ROLES_PATH.exists():       # старые wav по номерам -> имена по хешу, пока жив старый CSV
+        migrate_legacy_wavs(load_rows(), load_roles())
+'''
+    if _migration not in s:
+        raise RuntimeError("18d: исходный блок segment/migrate не найден")
+    s = s.replace(_migration, '    # 18d: подготовка не перемещает исходные WAV; прежняя редакция проверяется до разбивки.\n', 1)
+    _csv = '''    with CSV_PATH.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
+        w.writeheader()
+        w.writerows(rows)
+'''
+    if _csv not in s:
+        raise RuntimeError("18d: исходный блок записи segments.csv не найден")
+    s = s.replace(_csv, '    rows = _nox_merge_prepared_rows(HERE, rows)\n', 1)
+    _rolewrite = '    ROLES_PATH.write_text(json.dumps(roles, ensure_ascii=False, indent=2), encoding="utf-8")'
+    _segment_start = s.index('def segment(')
+    _segment_end = s.index('\ndef load_rows(', _segment_start)
+    _body = s[_segment_start:_segment_end]
+    if _rolewrite not in _body:
+        raise RuntimeError("18d: исходная запись roles.json в segment не найдена")
+    _body = _body.replace(_rolewrite, '    rows = _nox_commit_prepared_rows(HERE, rows, FIELDS, roles=roles)', 1)
+    s = s[:_segment_start] + _body + s[_segment_end:]
+    _imports = '''from nox_freeze import (guard_segment as _nox_guard_segment,
+    merge_prepared_rows as _nox_merge_prepared_rows, commit_prepared_rows as _nox_commit_prepared_rows,
+    read_protection as _nox_read_protection, edition_write_lock as _nox_write_lock,
+    preserve_pipeline_bundle as _nox_preserve_bundle, guard_metadata as _nox_guard_metadata)
+NOX_PROTECTION_VERSION = "18d"
+
+'''
+    s = s.replace('def segment(docx_paths, max_chars: int):', _imports + '@_nox_guard_segment\ndef segment(docx_paths, max_chars: int):', 1)
+    _a, _b = s.index('def fixed_parts(rows):'), s.index('\ndef fixed_prefix(')
+    s = s[:_a] + '''def fixed_parts(rows):
+    # Both real files are mandatory when parts are fixed. A corrupt file stops
+    # the pipeline before it can reinterpret protected audio as unprotected.
+    return [(a, b) for a, b, _number in _nox_read_protection(HERE, rows).ranges]
+
+''' + s[_b:]
+    _a = s.index('def fixed_set(rows, fx=None):')
+    _b = s.index('\ndef ', _a + 5)
+    s = s[:_a] + '''def fixed_set(rows, fx=None):
+    # Individual locks are significant even before their part is locked.
+    state = _nox_read_protection(HERE, rows)
+    out = set(state.protected_indices)
+    for a, b in ([(a, b) for a, b, _n in state.ranges] if fx is None else fx):
+        out.update(range(a, b + 1))
+    return out
+
+''' + s[_b:]
+    _a, _b = s.index('def work_window(rows, roles):'), s.index('\ndef plan_parts(')
+    _body = s[_a:_b]
+    _body = _body.replace('    idpos = {str(r["id"]): i for i, r in enumerate(rows)}', '''    _protection = _nox_read_protection(HERE, rows)
+    _opened = next(((a, b) for a, b, k in _protection.opened_ranges if k == num), None)
+    _next_fixed = min((a for a, b, k in _protection.ranges if a > i0), default=len(rows))
+    _limit = _opened[1] if _opened else _next_fixed - 1
+    idpos = {str(r["id"]): i for i, r in enumerate(rows)}''', 1)
+    _body = _body.replace('if pos and pos[0] == i0:',
+                          'if pos and pos[0] == i0 and pos[1] <= _limit and (not _opened or pos[1] == _opened[1]):', 1)
+    _body = _body.replace('    md = run_mode()', '''    if _opened:
+        return i0, _opened[1], num, False  # an opened Studio part retains its proved boundary
+    md = run_mode()''', 1)
+    _body = _body.replace('for i in range(i0, len(rows)):', 'for i in range(i0, _limit + 1):', 1)
+    _body = _body.replace('    return i0, len(rows) - 1, num, False', '    return i0, _limit, num, False', 1)
+    s = s[:_a] + _body + s[_b:]
+    _a, _b = s.index('def _asm_setup('), s.index('\ndef watch(')
+    _body = s[_a:_b]
+    _c = _body.index('    if asm_changed and PARTS.is_dir()')
+    _d = _body.index('    tv.write_text(', _c)
+    _body = _body[:_c] + '''    if asm_changed:
+        _state = _nox_read_protection(HERE, load_rows())
+        _numbers = {k for _a, _b, k in _state.ranges}
+        _previous = json.loads(PARTS_INDEX.read_text(encoding="utf-8")) if PARTS_INDEX.exists() else []
+        if not isinstance(_previous, list) or any(not isinstance(p, dict) for p in _previous):
+            raise RuntimeError("повреждён work/parts.json; прежние аудиофайлы оставлены")
+        for p in _previous:
+            if int(p.get("n", 0)) in _numbers:
+                p["fixed"] = True
+                p["sig"] = p.get("sig") or "fixed"
+            else:
+                p["sig"] = None
+                p.pop("fixed", None)
+        _atomic_text(PARTS_INDEX, json.dumps(_previous, ensure_ascii=False, indent=1))
+        _atomic_text(WORK / "book.sig", "")
+        print("watch: настройки сборки изменились; незакреплённые части будут собраны заново. "
+              "Прежние аудиофайлы, копии на Диске и версии со звуками сохранены до успешной замены.")
+''' + _body[_d:]
+    _body = _body.replace('    tv.write_text(cur_t, encoding="utf-8")', '    _atomic_text(tv, cur_t)')
+    _body = _body.replace('    av.write_text(asm_s, encoding="utf-8")', '    _atomic_text(av, asm_s)')
+    s = s[:_a] + '@_nox_guard_metadata\n' + _body + s[_b:]
+    _a, _b = s.index('def _part_check('), s.index('\ndef build_parts(')
+    _body = s[_a:_b]
+    _body = _body.replace('    for t0, t1, r in list(_TL):', '''    _current_rows = load_rows()
+    _protected_audio = {wav_for(_current_rows[i], roles) for i in
+                        _nox_read_protection(HERE, _current_rows).protected_indices}
+    for t0, t1, r in list(_TL):
+        if wav_for(r, roles) in _protected_audio:
+            continue''', 1)
+    _body = _body.replace('                    os.replace(p, dst)',
+                          '                    _nox_preserve_bundle(HERE, p)\n                    os.replace(p, dst)', 1)
+    s = s[:_a] + '@_nox_guard_metadata\n' + _body + s[_b:]
+    _a, _b = s.index('def build_parts('), s.index('\ndef copy_to(')
+    _body = s[_a:_b]
+    _body = _body.replace('    _nfx = len(fixed_prefix(rows))', '''    _fixed_numbers = {k for _a, _b, k in _nox_read_protection(HERE, rows).ranges}
+    _source_csv = CSV_PATH.read_bytes()''', 1)
+    _body = _body.replace('if n <= _nfx:', 'if n in _fixed_numbers:', 1)
+    _c = _body.index('        total = encode_m4b(')
+    _d = _body.index('        try:', _c)
+    _e = _body.index('        entry["sig"] = sig', _d)
+    _timings = _body[_d:_e].replace('out.with_name(f"part_{n:02d}.times.tsv").write_text(',
+                                   '_atomic_text(out.with_name(f"part_{n:02d}.times.tsv"),')
+    _timings = _timings.replace('for a_, b_, r_ in _TL), encoding="utf-8")', 'for a_, b_, r_ in _TL))')
+    _body = _body[:_c] + '''        # Encode under a unique draft name; only publish after checking the
+        # current edition again under the same OS lock used by Studio.
+        _draft = PARTS / f".nox_part_{n:02d}_{os.getpid()}_{time.time_ns()}.{fmt}"
+        try:
+            total = encode_m4b(audio, sr, chapters, _draft, f"{title} — часть {n:02d} ({ch_name})", author, bitrate,
+                              speed=speed)
+            with _nox_write_lock(HERE):
+                _latest = _nox_read_protection(HERE, rows)
+                if CSV_PATH.read_bytes() != _source_csv:
+                    raise RuntimeError("разбивка изменилась во время сборки; прежний файл части сохранён")
+                if n in {k for _a, _b, k in _latest.ranges}:
+                    entry["fixed"], entry["sig"] = True, "fixed"
+                    continue
+                if _part_sig(rows[a:b + 1], roles) != sig:
+                    continue
+                os.replace(_draft, out)
+''' + ''.join('        ' + _line if _line.strip() else _line for _line in _timings.splitlines(True)) + '''
+        finally:
+            _draft.unlink(missing_ok=True)
+''' + _body[_e:]
+    _body = _body.replace('    _atomic_text(PARTS_INDEX, json.dumps(frozen, ensure_ascii=False, indent=1))', '''    with _nox_write_lock(HERE):
+        _latest = _nox_read_protection(HERE, rows)
+        if CSV_PATH.read_bytes() != _source_csv:
+            raise RuntimeError("разбивка изменилась; индекс частей не заменён")
+        _entries = {int(p["n"]): p for p in frozen}
+        for _a, _b, _n in _latest.ranges:
+            _entry = _entries.setdefault(_n, dict(n=_n))
+            _entry.update(start=wav_for(rows[_a], roles).stem, end=wav_for(rows[_b], roles).stem,
+                          a_id=rows[_a]["id"], b_id=rows[_b]["id"], fixed=True)
+            _entry["sig"] = _entry.get("sig") or "fixed"
+        frozen = [_entries[k] for k in sorted(_entries)]
+        _atomic_text(PARTS_INDEX, json.dumps(frozen, ensure_ascii=False, indent=1))''', 1)
+    s = s[:_a] + _body + s[_b:]
+    _a, _b = s.index('def plan_parts('), s.index('\n_RAW_IDS =')
+    _body = s[_a:_b]
+    _body = _body.replace('    _atomic_text(DUR_CACHE, json.dumps(cache))', '''    # Refuse a partition that would renumber or incorporate another fixed part.
+    for _a, _b, _n in _nox_read_protection(HERE, rows).ranges:
+        if len(parts) >= _n and tuple(parts[_n - 1][:2]) != (_a, _b):
+            raise RuntimeError(f"защита редакции: новая сборка меняет границы закреплённой части {_n}")
+        for _k, (_x, _y, _closed) in enumerate(parts, 1):
+            if max(_a, _x) <= min(_b, _y) and (_k, _x, _y) != (_n, _a, _b):
+                raise RuntimeError(f"защита редакции: часть {_k} пересекает закреплённую часть {_n}")
+    _atomic_text(DUR_CACHE, json.dumps(cache))''', 1)
+    s = s[:_a] + _body + s[_b:]
+
 bak = p.with_suffix(".py.bak-k2")
 bak.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
 p.write_text(s, encoding="utf-8")
@@ -2744,6 +2962,15 @@ print(f"патч применён (правок: {applied} + ударения), 
 
 '@
 $utf8 = New-Object System.Text.UTF8Encoding $false
+$freezeSource = Join-Path $PSScriptRoot 'nox_freeze.py'
+$freezeTarget = Join-Path $Root 'nox_freeze.py'
+if (Test-Path -LiteralPath $freezeSource) {
+    if ([IO.Path]::GetFullPath($freezeSource) -ne [IO.Path]::GetFullPath($freezeTarget)) {
+        Copy-Item -LiteralPath $freezeSource -Destination $freezeTarget -Force -ErrorAction Stop
+    }
+} elseif (-not (Test-Path -LiteralPath $freezeTarget)) {
+    throw 'Нет nox_freeze.py из комплекта 18d: подготовка остановлена до изменения разбивки.'
+}
 [IO.File]::WriteAllText("$Root\patch_k1a.py", $patchPy, $utf8)
 & "$Root\env\python.exe" "$Root\patch_k1a.py" "$Root\nox_audiobook.new.py"
 if ($LASTEXITCODE -ne 0) { Write-Host "патч не применился — пришлите вывод в чат" -ForegroundColor Red; exit 1 }
@@ -2806,9 +3033,10 @@ if ($Title) {     # защита от чужой рукописи: в начал
     }
 }
 Write-Host ("  рукопись: " + $Docx)
-if ((Resolve-Path -LiteralPath $Docx).Path -ne "$Root\book.docx") { Copy-Item -LiteralPath $Docx "$Root\book.docx" -Force }
+$segmentDocx = (Resolve-Path -LiteralPath $Docx).Path
 Set-Location $Root
-& "$Root\env\python.exe" "$Root\nox_audiobook.py" segment "$Root\book.docx" --max-chars $MaxChars   # короче 300: модель с ударениями глотает слова на длинных кусках
+# book.docx, roles.json и CSV публикуются вместе модулем защиты только после проверки прежней редакции.
+& "$Root\env\python.exe" "$Root\nox_audiobook.py" segment $segmentDocx --max-chars $MaxChars
 if ($LASTEXITCODE -ne 0) { Write-Host "разбивка упала — пришлите вывод в чат" -ForegroundColor Red; exit 1 }
 
 Write-Host ""

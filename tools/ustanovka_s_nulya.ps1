@@ -19,7 +19,7 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:HF_HUB_DISABLE_SYML
 $RepoDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)      # папка репозитория (над tools)
 if (-not $Downloads) { $Downloads = Join-Path $env:USERPROFILE "Downloads" }
 $TORCH_VER = "2.11.0"; $TORCH_INDEX = "https://download.pytorch.org/whl/cu128"; $DRIVER_MIN = 570
-$BASE_SHA = "4844E7C3AB344B702EA403DA08E4F1E346030CDA"
+$BASE_SHA = "5DDBFE2A4EAC4D1573BF9EBFA66F0D88B8E21B5A"
 $PY_URL = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
 $FF_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
 $script:did = 0; $script:skipped = 0
@@ -223,31 +223,28 @@ try {
         if (-not $Plan) { Copy-Item -LiteralPath $basePy -Destination $srcPy -ErrorAction Stop }
     }
 
-    # ------------------------------------------------------------------ 7. комплект — в Загрузки
-    Step "7. Комплект и сборщик -> Загрузки"
-    $goDl = Join-Path $Downloads "go_kniga1a.ps1"
-    $have = ""
-    if (Test-Path -LiteralPath $goDl) { if ((Get-Content -LiteralPath $goDl -TotalCount 80 -Encoding UTF8 | Out-String) -match 'NOX_KIT (\d{4}-\d\d-\d\d[a-z]?)') { $have = $Matches[1] } }
-    $kitDir = Join-Path $Downloads ("kit_nox_" + $kitVer)
-    $inDir = ""
-    $goKit = Join-Path $kitDir "go_kniga1a.ps1"
-    if (Test-Path -LiteralPath $goKit) { if ((Get-Content -LiteralPath $goKit -TotalCount 80 -Encoding UTF8 | Out-String) -match 'NOX_KIT (\d{4}-\d\d-\d\d[a-z]?)') { $inDir = $Matches[1] } }
-    if ($have -and $have -eq $kitVer) { Skip ("комплект " + $kitVer + " уже разложен в Загрузках") }
-    elseif ($inDir -and $inDir -eq $kitVer) { Skip ("папка " + (Split-Path $kitDir -Leaf) + " с комплектом уже в Загрузках") }
-    else {
-        Say ("  + " + $kitDir + " (19 файлов комплекта; сборщик с ключом -Fix разложит их по местам)"); $script:did++
-        if (-not $Plan) {
+    # ------------------------------------------------------------------ 7. full, immutable release (not a loose-file subset)
+    Step "7. Полный комплект и общий редактор"
+    $manifestPath = Join-Path $RepoDir 'release_manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) { Die 'Нужен полный архив 18d с release_manifest.json.' }
+    $release = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $kitDir = Join-Path (Join-Path $Src 'kits') $release.build_id
+    if (-not $Plan) {
+        & $FPy -B (Join-Path $RepoDir 'kit\nox_update.py') --root (Join-Path $Src 'new_book') --home $Src --bundle $RepoDir --verify-bundle
+        if ($LASTEXITCODE -ne 0) { Die 'Контрольные суммы комплекта не совпали.' }
+        if (-not (Test-Path -LiteralPath $kitDir)) {
             New-Item -ItemType Directory -Force -Path $kitDir | Out-Null
-            Copy-Item -Path (Join-Path (Join-Path $RepoDir "kit") "*") -Destination $kitDir -Force -ErrorAction Stop
+            foreach ($entry in $release.files) {
+                $to = Join-Path $kitDir $entry.source
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $to) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $RepoDir $entry.source) -Destination $to -ErrorAction Stop
+            }
+            Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $kitDir 'release_manifest.json') -ErrorAction Stop
         }
-    }
-    foreach ($pair in @(@("tools/sborshchik_k1a.ps1", "sborshchik_k1a.ps1"), @("data/accent_dict.csv", "accent_dict.csv"))) {
-        $to = Join-Path $Downloads $pair[1]
-        if (Test-Path -LiteralPath $to) { Skip ($pair[1] + " в Загрузках") }
-        elseif (Test-Path -LiteralPath (Join-Path $RepoDir $pair[0])) {
-            Say ("  + " + $to); $script:did++
-            if (-not $Plan) { Copy-Item -LiteralPath (Join-Path $RepoDir $pair[0]) -Destination $to -ErrorAction Stop }
-        }
+        & $FPy -B (Join-Path $kitDir 'kit\nox_update.py') --root (Join-Path $Src 'new_book') --home $Src --bundle $kitDir --verify-bundle
+        if ($LASTEXITCODE -ne 0) { Die 'Установленный полный комплект изменён; не перезаписываю его.' }
+        & $FPy -B (Join-Path $kitDir 'kit\nox_update.py') --root (Join-Path $Src 'new_book') --home $Src --bundle $kitDir --install-new-app
+        if ($LASTEXITCODE -ne 0) { Die 'Общий редактор не установлен; причина выше.' }
     }
 
     Say ""
@@ -257,8 +254,8 @@ try {
     Say "Дальше — книга:"
     Say "  1) положите в Загрузки рукопись kniga1.docx и файлы книги (сценарий ролей speaker_overrides_kniga1a.tsv, поправки ударений stress_fixes_kniga1a.tsv);"
     Say "     образцы голосов, роли и правки студии, если они сохранены с прежней машины, — в папку книги D:\kniga1a (work\voices, work\roles.json, studio);"
-    Say "  2) powershell -NoProfile -ExecutionPolicy Bypass -File `"$Downloads\sborshchik_k1a.ps1`" -Fix"
-    Say "  3) powershell -NoProfile -ExecutionPolicy Bypass -File `"$Downloads\go_kniga1a.ps1`""
+    Say "  2) импорт новой книги: powershell -NoProfile -ExecutionPolicy Bypass -File `"$kitDir\kit\nox_studio.ps1`" -NewBook -Root D:\kniga1a -NoxHome `"$Src`""
+    Say "  3) powershell -NoProfile -ExecutionPolicy Bypass -File `"$kitDir\kit\go_kniga1a.ps1`" -Root D:\kniga1a -NoxHome `"$Src`""
     Say "Новая книга без этих файлов: go_kniga1a.ps1 -Root D:\имя_папки, рукопись — book.docx в этой папке; голоса подберутся из банка сами."
     exit 0
 } catch {

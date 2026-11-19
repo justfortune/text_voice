@@ -7,6 +7,13 @@
 !/tools/
 !/base/
 !/data/
+!/docs/
+!/tests/
+!/runtime/
+!/CHANGELOG.md
+!/Update_NOX_18d.ps1
+!/release_manifest.json
+/tests/generated_runtime/
 
 # Никогда — даже внутри разрешённых папок: рукопись, звук, проекты студии, таблицы, архивы, рабочие данные книги.
 *.docx

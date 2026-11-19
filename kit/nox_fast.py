@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 """
 nox_fast.py — быстрый воркер озвучки для nox_audiobook на движке faster-qwen3-tts (CUDA-графы).
 
@@ -556,17 +556,20 @@ def main():
           + ("; весь текст сразу" if nonstream else "") + (f"; хвост «{tail_sfx.strip()}»" if tail_sfx else "")
           + (f"; по предложениям, пауза {sent_pause:.2f} с" if split_sent else "")
           + ("; сторож голоса включён" if vguard else ""), flush=True)
-    if args.chapter:
-        rows = [r for r in rows if int(r["chapter"]) in args.chapter]
-    total_all = len(rows)
+    selected = [r for r in rows if not args.chapter or int(r["chapter"]) in args.chapter]
+    total_all = len(selected)
     # части, закреплённые автором в студии, конвейер не трогает (ни в каком режиме)
     try:
-        fxs = n.fixed_set(rows) if hasattr(n, "fixed_set") and not args.chapter else set()
+        from nox_freeze import ProtectionError, read_protection, preserve_pipeline_bundle
+        fxs = set(read_protection(n.HERE, rows).protected_indices)
     except Exception as e:
-        print(f"{tag} список закреплённых частей не прочитан ({type(e).__name__}) — считаю, что их нет", flush=True)
-        fxs = set()
+        print(f"{tag} защита редакции: {type(e).__name__}: {e}; озвучка остановлена, записи не изменены", flush=True)
+        raise SystemExit(4) from e
+    row_indices = {id(r): i for i, r in enumerate(rows)}
+    csv_stat = n.CSV_PATH.stat()
+    csv_signature = (csv_stat.st_size, csv_stat.st_mtime_ns)
     BP = bool(hasattr(n, "by_parts") and n.by_parts() and not args.chapter and not args.reverse and not args.serve)
-    todo = [r for i, r in enumerate(rows) if i not in fxs and not n.wav_for(r, roles).exists()]
+    todo = [r for r in selected if row_indices[id(r)] not in fxs and not n.wav_for(r, roles).exists()]
     hb = n.WORK / "asr_active.txt"
 
     def asr_alive() -> bool:
@@ -581,7 +584,7 @@ def main():
     if not todo and (BP or not asr_alive()) and not args.serve:
         print(tag, "все сегменты уже озвучены")
         return
-    order = [r for i, r in enumerate(rows) if i not in fxs]
+    order = [r for r in selected if row_indices[id(r)] not in fxs]
     if args.reverse:
         order.reverse()
     print(f"{tag} " + (f"режим «по частям»: работаю только над первой незакреплённой частью и после неё останавливаюсь "
@@ -690,16 +693,55 @@ def main():
     audio_sec, done_chars = [0.0], [0]
     todo_chars = sum(len(r["text"]) for r in todo) or 1
     t0 = time.time()
+    protection_cache = {"signature": None, "state": None, "audio": set()}
+
+    def protection_now():
+        current_stat = n.CSV_PATH.stat()
+        if (current_stat.st_size, current_stat.st_mtime_ns) != csv_signature:
+            raise ProtectionError("segments.csv изменился во время озвучки; запустите воркер заново")
+        if (n.WORK / ".nox_prepare.lock").exists():
+            raise ProtectionError("идёт подготовка книги; озвучка остановлена до изменения разбивки")
+        if (n.WORK / ".nox_roles.lock").exists():
+            raise ProtectionError("идёт смена голосов; озвучка остановлена до изменения образцов")
+        signature = []
+        for path in (n.HERE / "studio" / "edits.json", n.HERE / "studio" / "fixed_parts.json", n.ROLES_PATH):
+            try:
+                q = path.stat()
+                signature.append((q.st_size, q.st_mtime_ns))
+            except FileNotFoundError:
+                signature.append(None)
+        if signature != protection_cache["signature"]:
+            protected = read_protection(n.HERE, rows)
+            protection_cache.update(signature=signature, state=protected,
+                                    audio={n.wav_for(rows[i], roles) for i in protected.protected_indices})
+        return protection_cache["state"]
+
+    def row_is_owned(r):
+        """Recheck ownership immediately before a claim and before publishing.
+
+        A moving duration-based window must not authorize an old range for an
+        entire loop. A resegmentation requires a new process and a fresh CSV.
+        """
+        protected = protection_now().protected_indices
+        i = row_indices[id(r)]
+        if i in protected or n.wav_for(r, roles) in protection_cache["audio"]:
+            return False
+        if BP:
+            current = n.work_window(rows, roles)
+            return not current[3] and current[0] <= i <= current[1]
+        return True
 
     def synth_row(r) -> str:
         """Озвучить одну реплику -> "done" | "busy" (занята другим/уже есть) | "fail"."""
+        if not row_is_owned(r):
+            return "busy"
         p = n.wav_for(r, roles)
         if p.exists():
             return "busy"
         if not n.claim(p):
             return "busy"
         try:
-            if p.exists():
+            if p.exists() or not row_is_owned(r):
                 return "busy"
             redo = any(p.parent.glob(p.stem + ".rej*.wav"))   # проверка распознаванием отбраковала прежнюю запись
             try:
@@ -802,6 +844,8 @@ def main():
                 if best_meta.get("alien"):              # сторож голоса: кусок так и остался чужим (проверка переспросит)
                     with susp_log.open("a", encoding="utf-8") as f:
                         f.write(f"{r['id']}\tчужой голос в {best_meta['alien']} предл. (роль {role})\t{r['text'][:80]}\n")
+                if not row_is_owned(r):
+                    return "busy"  # the part was closed/locked while inference ran; publish nothing
                 try:   # что именно было прочитано (после словаря/ударений) — для проверки и точечной переозвучки
                     p.with_suffix(".txt").write_text(text, encoding="utf-8")
                 except Exception:
@@ -820,6 +864,8 @@ def main():
                 if redo:
                     cnt["redo"] += 1
                 return "done"
+            except ProtectionError:
+                raise
             except Exception as e:
                 cnt["fails"] += 1
                 fail_row[r["id"]] += 1
@@ -914,6 +960,7 @@ def main():
                     ref_audio=padded_ref(rw, ref_sil), ref_text=ref_text, x_vector_only_mode=args.xvec or not ref_text)
         elif role not in roles["roles"]:
             raise ValueError(f"нет роли «{role}» в ролях книги")
+        source_voice_key = None if ref else voice_key(role)
         text = str(req.get("text", "")).strip()
         if req.get("prep"):                            # фраза, вставленная автором в студии: ударения ставим здесь, как книге
             try:
@@ -990,6 +1037,9 @@ def main():
                         attempts=att, tried=done_k, role=role, text=text, worker=args.worker)
         how = ", ".join(w for w, on in (("голос по отпечатку образца", st_["xv"] and not xv),
                                         ("точка на конце", st_["dot"])) if on) if st_["extra"] else ""
+        protection_now()
+        if not ref and voice_key(role) != source_voice_key:
+            raise ProtectionError("образец голоса сменился во время заявки; дубль не опубликован")
         out = Path(str(req["out"]))
         out.parent.mkdir(parents=True, exist_ok=True)
         n.write_wav_atomic(out, x, sr)
@@ -1002,9 +1052,10 @@ def main():
         """Обслужить заявки редактора (если есть) -> сколько обслужено. Заодно — сердцебиение «воркер умеет заявки»."""
         if not QDIR.is_dir():
             return 0
+        protection_now()
         import json
         now = time.time()
-        if now - qstat["beat"] > 5:
+        if state["model"] is not None and now - qstat["beat"] > 5:
             qstat["beat"] = now
             try:
                 alive_f.write_text(f"{os.getpid()}\t{now:.0f}\t{'serve' if args.serve else 'book'}", encoding="utf-8")
@@ -1059,7 +1110,6 @@ def main():
         print(f"{tag} режим редактора: жду заявки на переозвучку (work\\studio_queue); книга не озвучивается", flush=True)
         ed, idle = QDIR / "editor.txt", time.time()
         try:
-            serve_queue()                                 # сердцебиение — сразу, ещё до загрузки модели
             get_model()                                   # прогрев заранее: первая заявка не ждёт загрузку
             while True:
                 if serve_queue():
@@ -1084,6 +1134,8 @@ def main():
     def stale_drop(r, p):
         """Запись есть, но прочитан в ней прежний текст (изменились словарь, ударения по месту или правила слоя текста) —
         убрать её: реплика озвучится заново. Так аудит всей книги не нужен: проверяется только текущая часть."""
+        if not row_is_owned(r):
+            return
         side = p.with_suffix(".txt")
         try:
             old = side.read_text(encoding="utf-8")
@@ -1095,6 +1147,9 @@ def main():
         if not n.claim(p):
             return
         try:
+            if not row_is_owned(r):
+                return
+            preserve_pipeline_bundle(n.HERE, p)
             for f in [p, side] + [p.with_suffix(x) for x in (".ok", ".meta", ".gaps")]:
                 f.unlink(missing_ok=True)
             print(f"{tag} реплика {r['id']}: текст для озвучки изменился — озвучиваю заново", flush=True)
@@ -1109,6 +1164,8 @@ def main():
             serve_queue()
             try:
                 w = n.work_window(rows, roles)
+            except ProtectionError:
+                raise
             except Exception as e:
                 print(f"{tag} окно работы не определить ({type(e).__name__}: {str(e)[:100]}) — через 10 с снова", flush=True)
                 time.sleep(10)
@@ -1210,6 +1267,10 @@ def main():
                 for _ in range(20):                     # 10 с ожидания, заявки редактора — каждые полсекунды
                     serve_queue()
                     time.sleep(0.5)
+    except ProtectionError as e:
+        print(f"{tag} защита редакции: {e}; остановлен, готовые записи сохранены", flush=True)
+        alive_f.unlink(missing_ok=True)
+        raise SystemExit(4) from e
     except KeyboardInterrupt:
         print(f"\n{tag} прервано — всё готовое сохранено, повторный запуск продолжит с места остановки", flush=True)
         try:

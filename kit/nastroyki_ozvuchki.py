@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 """
 nastroyki_ozvuchki.py — конфигуратор озвучки: таблица «Настройки озвучки.xlsx» в папке книги (D:\\kniga1a и т.п.).
 
@@ -514,7 +514,7 @@ def write_atomic(path: Path, text: str):
     tmp.unlink(missing_ok=True)
 
 
-def share_voices(roles, n, src_root: str, done: set | None = None) -> tuple[set, list]:
+def share_voices(roles, n, src_root: str, done: set | None = None, guard=None) -> tuple[set, list]:
     """Общие персонажи звучат так же, как в другой книге: образец голоса и его описание копируются оттуда.
     -> (роли, у которых голос сменился (их реплики переозвучить), сообщения)"""
     import hashlib
@@ -531,8 +531,12 @@ def share_voices(roles, n, src_root: str, done: set | None = None) -> tuple[set,
 
     def h(p):
         return hashlib.sha1(p.read_bytes()).hexdigest() if p.exists() else None
+    if guard is None:
+        raise RuntimeError("смена образцов требует защиты редакции RoleSafety")
     shared = 0
     for role, cfg in roles["roles"].items():
+        if role in guard.protected:
+            continue
         own_edit = cfg.get("user_cfg") and cfg.get("user_cfg_book", ROOT.name.lower()) == ROOT.name.lower()
         if GENERIC_SPLIT.match(role) or own_edit or role not in sroles["roles"] or (done is not None and role in done):
             continue
@@ -550,11 +554,8 @@ def share_voices(roles, n, src_root: str, done: set | None = None) -> tuple[set,
         s_txt = s_wav.with_suffix(".txt")
         t_wav, t_txt = n.voice_files(role, tstems)
         hs, ht = h(s_wav), h(t_wav)
-        if hs != ht:
-            t_wav.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(s_wav, t_wav)
-            if s_txt.exists():
-                shutil.copy2(s_txt, t_txt)
+        if hs != ht or h(s_txt) != h(t_txt):
+            guard.replace_samples(role, (t_wav, t_txt), (s_wav, s_txt))
             if ht is not None:
                 changed.add(role)
                 msgs.append(f"  голос «{role}» обновлён из {src.name} — его реплики переозвучатся")
@@ -573,7 +574,7 @@ def voice_key(r):
     return (r.get("gender"), r.get("age"), (r.get("desc") or "").strip())
 
 
-def cmd_roles():
+def _cmd_roles(guard):
     sys.path.insert(0, str(ROOT))
     import nox_audiobook as n
     if not n.ROLES_PATH.exists():
@@ -603,7 +604,7 @@ def cmd_roles():
 
     # роли без единой реплики (старые догадки, базовые «старик», «женщина»...) — убрать, если это не меняет имена файлов
     if rows:
-        keep = set(lines) | set(FIXED_ROLES) | set(aliases.values()) \
+        keep = set(lines) | guard.protected | set(FIXED_ROLES) | set(aliases.values()) \
             | {c.get("same_as") for c in roles["roles"].values() if c.get("same_as")}
         for role in [r for r in roles["roles"] if r not in keep]:
             before = n.voice_stems(roles)
@@ -626,19 +627,29 @@ def cmd_roles():
         for c in roles["roles"].values():
             c.pop("shared", None)
         for src_root in srcs:                      # несколько книг через «;»: персонаж берётся из первой, где он есть
-            ch_, ms_ = share_voices(roles, n, src_root, done)
+            ch_, ms_ = share_voices(roles, n, src_root, done, guard=guard)
             share_changed |= ch_
             share_msgs += ms_
     else:
         for c in roles["roles"].values():
             c.pop("shared", None)
 
+    guard.protect_candidate(roles)
     recast, notes, warn = set(), [], []
     notes += share_msgs
     retempo = []
     out_rows = {}
     for role, cfg in roles["roles"].items():
         seed = seed_row(role, cfg, vk)
+        if role in guard.protected:
+            row = dict(seed)
+            row["recast"] = False
+            out_rows[role] = row
+            requested = xl.get(role)
+            if requested and (requested.get("recast") or voice_key(requested) != voice_key(seed)
+                              or (requested.get("same_as") or "") != (cfg.get("same_as") or "")):
+                warn.append(f"{role}: голос используется закреплённой редакцией; автоматическая замена не применена")
+            continue
         ui = cfg.get("ui")
         row = xl.get(role)
         if row is None:
@@ -718,35 +729,10 @@ def cmd_roles():
         cfg["ui"] = raw if voice_edited else {"gender": row["gender"], "age": row["age"], "desc": row["desc"]}
         out_rows[role] = row
 
-    write_atomic(n.ROLES_PATH, json.dumps(roles, ensure_ascii=False, indent=2))
-
+    guard.write_roles(roles)
     stems = n.voice_stems(roles)
-    removed_wavs = 0
-    if share_changed and rows and n.WAVS.is_dir():
-        for r in rows:
-            if n.resolve_role(r["speaker"], roles) in share_changed:
-                p = n.wav_for(r, roles)
-                if p.exists():
-                    p.unlink()
-                    removed_wavs += 1
-                    t = p.with_suffix(".txt")
-                    if t.exists():
-                        t.unlink()
-    if recast:
-        for role in recast:
-            for p in n.voice_files(role, stems):
-                if p.exists():
-                    p.unlink()
-        if rows and n.WAVS.is_dir():
-            for r in rows:
-                if n.resolve_role(r["speaker"], roles) in recast:
-                    p = n.wav_for(r, roles)
-                    if p.exists():
-                        p.unlink()
-                        removed_wavs += 1
-                        t = p.with_suffix(".txt")
-                        if t.exists():
-                            t.unlink()
+    removed_wavs = guard.invalidate_wavs(share_changed | recast, roles)
+    guard.retire_samples(recast)
 
     # строки таблицы: справочные колонки
     table = []
@@ -1022,6 +1008,17 @@ def write_xlsx(general_ui: dict | None, role_rows: list | None):
             pass
         print("  таблица открыта в Excel — обновить её не удалось (ваши сохранённые правки учтены); "
               "закройте Excel, и при следующем запуске она обновится")
+
+
+def cmd_roles():
+    sys.path.insert(0, str(ROOT))
+    import nox_audiobook as n
+    from nox_voice_safety import RoleSafety
+    if not n.ROLES_PATH.exists():
+        print("  roles.json ещё нет — роли появятся после разбивки")
+        return
+    with RoleSafety(n) as guard:
+        return _cmd_roles(guard)
 
 
 if __name__ == "__main__":

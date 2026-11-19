@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Нокс Студия</title>
-<!-- NOX_STUDIO 2026-11-12a · интерфейс «Нокс Студии»; сервер — nox_studio.py. Без внешних библиотек: работает без сети. -->
+<!-- NOX_STUDIO 2026-11-18d · интерфейс «Нокс Студии»; сервер — nox_studio.py. Без внешних библиотек: работает без сети. -->
 <style>
 :root{
   --paper:#E8ECEA; --sheet:#FBFCFA; --ink:#17202A; --ink2:#5B6875; --rule:#CBD3CF; --tape:#DCE2DF;
@@ -78,7 +78,7 @@ button.ghost{border-color:transparent;padding:5px 7px}
 #insp .lanes{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center;margin:8px 0 12px}
 #insp .lanes label.chk{margin:0}
 .dlg input[type=search]{width:100%;background:var(--sheet);border:1px solid var(--rule);border-radius:3px;padding:8px 10px;margin:4px 0 10px}
-.dlg .snds{max-height:46vh;min-height:120px;overflow:auto;border:1px solid var(--rule)}
+.dlg .sectabs{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 4px}.dlg .sectabs button{padding:3px 9px;font-size:12px}.dlg .sectabs button.on{background:var(--ink);color:var(--sheet)}.dlg .sectabs.grp button{font-size:11.5px;opacity:.9}.dlg .snds{max-height:46vh;min-height:120px;overflow:auto;border:1px solid var(--rule)}
 .dlg .snd{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:3px 10px 3px 4px;cursor:pointer;border-bottom:1px solid var(--rule)}
 .dlg .snd:hover{background:var(--hover)} .dlg .snd span{overflow-wrap:anywhere} .dlg .snd small{color:var(--ink2);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dlg .snd span i{display:block;font-style:normal;font-size:11.5px;color:var(--ink2);overflow-wrap:anywhere}
@@ -165,6 +165,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 430px;min-height:0}
 .ph .mg{flex-wrap:wrap}
 #insp.dropok{outline:2px dashed var(--blue);outline-offset:-6px}
 /* окно обрезки записи */
+.oldvoices .oldvoice{padding:10px 12px;border-bottom:1px solid var(--rule)}.oldvoices .oldvoice:last-child{border-bottom:0}.oldvoices .trtext{margin:0}.oldvoices .tools{flex-wrap:wrap}.oldvoices .note{margin:6px 0}.dlg .snd span{overflow-wrap:anywhere}
 #trCv{display:block;width:100%;height:132px;border:1px solid var(--rule);cursor:ew-resize;touch-action:none;margin:10px 0 8px}
 .trrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .trrow label{color:var(--ink2);display:flex;gap:6px;align-items:center}
@@ -437,8 +438,8 @@ body.book-text-mode.book-no-audio #cv,body.book-text-mode.book-no-audio #mini,bo
       <button data-jf="all" class="on">Всё</button><button data-jf="imp" title="Только замечания и сбои">Важное</button><button data-jf="eng" title="Вывод движка озвучки и ход переозвучки">Движок</button><button data-jf="edit" title="Что вы меняли">Правки</button><button data-jf="chk" title="Строки самопроверки">Проверка</button>
       <span class="sp"></span>
       <button id="jCheck" title="Проверить заново: книга, записи, ffmpeg, голоса, движок, видеокарта, звуки, место на диске">Проверить всё</button>
-      <button id="jDup" title="Убрать невыбранные дубли и артефакты. Выбранные дубли и закреплённое не затрагиваются; убранное уходит в корзину студии (studio\\trash), правки копируются">Убрать дубли (с копией)</button>
-      <button id="jDup0" title="То же, но убранное стирается насовсем, без копии">Убрать дубли без копии</button>
+      <button id="jDup" title="Убрать неиспользуемые дубли в корзину с дополнительной копией проекта. Ctrl+Z возвращает файлы">Убрать дубли с копией проекта</button>
+      <button id="jDup0" title="Убрать дубли в корзину без дополнительной копии проекта. Ctrl+Z и сохранённые проекты продолжают защищать записи">Убрать без дополнительной копии</button>
       <button id="jClean" title="Удалить кэш студии. Он пересчитывается сам; правки, дубли и готовые файлы не затрагиваются">Очистить кэш</button>
       <button id="jOpenG" title="Открыть папку готовых частей и глав">Папка готового</button>
       <button id="jOpenS" title="Открыть папку студии: правки, дубли, файлы журналов">Папка студии</button>
@@ -735,11 +736,11 @@ function saveSoon(force){
 async function saveEd(){
   clearTimeout(saveT);
   commitFree();
-  const ed = S.ed; if(!ed || !ed.dirty) return;
+  const ed = S.ed; if(!ed || !ed.dirty) return true;
   const s = segOf(ed.uid); if(!s || s.locked){ ed.dirty = false; return; }
   ed.dirty = false;
-  try { const r = await api("/api/seg", {uid:ed.uid, part:S.n, set:{role:ed.role, tech:edText()}}); if(r.part) setPart(r.part); }
-  catch(e){ fail(e); }
+  try { const r = await api("/api/seg", {uid:ed.uid, part:S.n, set:{role:ed.role, tech:edText()}}); if(r.part) setPart(r.part); return true; }
+  catch(e){ ed.dirty = true; fail(e); return false; }
 }
 function wordsHTML(s){
   const ch = new Set(), a = tokenize(s.auto ?? s.base_tech).filter(x => x.w), b = S.ed.tokens.filter(x => x.w);
@@ -829,12 +830,13 @@ function drawInsp(){
   h += '<label class="f">Дубли</label><div class="takes">';
   if(s.draft) h += takeRow(s, null, "Черновая запись", "конвейер", !s.takes.some(t => t.chosen), [], lk);
   for(const t of s.takes) h += takeRow(s, t.tid, takeName(t), (t.src === "import" && t.name ? t.name + ", " : "") + (t.dur ? Number(t.dur).toFixed(1) + " с" : "") + (t.at ? ", " + t.at.slice(11, 16) : "")
-                                        + (t.trim ? ", обрезано до " + (t.trim[1] - t.trim[0]).toFixed(1) + " с" : ""), t.chosen, t.why, lk);
+                                        + (t.trim ? ", обрезано до " + trimSpansOf(t.trim, 1e9).reduce((a, q) => a + q[1] - q[0], 0).toFixed(1) + " с" + (Array.isArray(t.trim[0]) ? " (с вырезом)" : "") : ""), t.chosen, t.why, lk);
   h += '</div>';
-  if(!lk) h += '<div class="tools"><button id="ownMic" title="Записать выбранную фразу своим голосом через микрофон ПК">Записать с микрофона…</button>'
+  if(!lk) h += '<div class="tools"><button id="oldV" title="Сравнить с сохранившимися дублями прежней разбивки, прослушать и вернуть вручную">Прежние озвучки…</button><button id="ownMic" title="Записать выбранную фразу своим голосом через микрофон ПК">Записать с микрофона…</button>'
              + '<button id="ownRec" title="Ваша запись с компьютера (mp3, wav и другие) станет новым дублем этой фразы. Прежние дубли остаются; запись можно обрезать (U)">Своя запись с компьютера…</button>'
             + (S.part.locked ? "" : '<button id="insAfter" title="Новая фраза сразу после этой: её озвучит движок или вы сами (Insert)">Вставить фразу после этой…</button>')
-            + (!S.part.locked && !s.ins && !(s.joined && s.joined.length) && (s.edits || []).length ? '<button id="segReset" title="Только эта фраза снова станет такой, какой её озвучил конвейер: роль и текст как в книге, обычные скорость и паузы, черновая запись. Дубли остаются в списке. Отмена — Ctrl+Z">Сбросить правки фразы</button>' : "") + '</div>';
+            + (!S.part.locked && !s.ins && !(s.joined && s.joined.length) ? '<button id="segReset"' + ((s.edits || []).length ? '' : ' disabled') + ' title="Только эта фраза вернётся к тексту, роли и записи конвейера. Дубли останутся в списке. Отмена — Ctrl+Z">Сбросить правки фразы</button>'
+              + ((s.edits || []).length || s.takes.length ? '<button id="segWipe" title="Все дубли этой фразы уйдут в корзину студии, правки сбросятся. Черновая запись конвейера остаётся. Ctrl+Z возвращает файлы и правки">Убрать дубли и сбросить правки</button>' : '') : "") + '</div>';
   if(ownChosen(s)) h += '<div class="note">Звучит ваша запись. Правила чтения, словарь и смена роли её не меняют. «Озвучить заново» сделает дубль движка — запись останется в списке.</div>';
   if(s.flags.length) h += '<div class="flagbox">' + s.flags.map(f => "<div>" + esc(f) + "</div>").join("") + '<div class="tools"><button id="ack">Послушал, всё в порядке</button></div></div>';
   h += '<div class="acts"><button id="lockSeg" class="lockb' + (lk ? " on" : "") + '">' + (lk ? "Снять закрепление" : "Закрепить фразу") + '</button>'
@@ -856,8 +858,8 @@ function takeRow(s, tid, name, sub, chosen, why, lk){
   return '<div class="take"><input type="radio" name="take" ' + (chosen ? "checked" : "") + (lk ? " disabled" : "") + ' data-tid="' + (tid || "") + '" title="Поставить в часть">'
     + '<div><div class="t1">' + esc(name) + '</div><div class="t2">' + esc(sub) + (why && why.length ? ' <span class="warn">' + esc(why.join(", ")) + '</span>' : "") + '</div></div>'
     + '<button data-hear="' + (tid || "") + '" title="Послушать запись как есть, без обрезки">' + ICON.play + '</button>'
-    + '<button data-trim="' + (tid || "") + '"' + (lk ? " disabled" : "") + ' title="Обрезать начало и конец записи. Сам файл не меняется (T)">' + ICON.cut + '</button>'
-    + (tid && !chosen ? '<button data-del="' + tid + '" class="ghost" title="Убрать дубль из списка (файл уйдёт в корзину студии)">✕</button>' : '<span></span>') + '</div>';
+    + '<button data-trim="' + (tid || "") + '"' + (lk ? " disabled" : "") + ' title="Обрезать края или вырезать несколько кусков внутри записи. Сам файл не меняется (T)">' + ICON.cut + '</button>'
+    + (tid && !lk ? '<button data-del="' + tid + '" class="ghost" title="Убрать дубль в корзину студии. Ctrl+Z вернёт его' + (chosen ? '; сейчас выбран этот дубль' : '') + '">✕</button>' : '<span></span>') + '</div>';
 }
 function summaryHTML(p){
   const c = {draft:0, edited:0, stale:0, empty:0, lost:0, locked:0}; let marks = 0, flags = 0;
@@ -915,6 +917,7 @@ function bindInsp(s){
   on("#joinNext", "click", () => joinNext(s.uid));
   on("#unjoin", "click", () => unjoin(s.uid));
   on("#segReset", "click", () => resetSeg(s.uid));
+  on("#segWipe", "click", () => wipeSeg(s.uid));
   on("#vkeep", "click", () => setSeg(s.uid, {vkeep: true}));
   on("#roleFind", "click", () => roleFind(s));
   on("#synth", "click", () => synth(s.uid));
@@ -929,12 +932,19 @@ function bindInsp(s){
   on("#lockUpTo", "click", () => lockUpTo(s));
   for(const r of document.querySelectorAll('.take input[type=radio]')) r.addEventListener("change", () => chooseTake(s.uid, r.dataset.tid || null));
   for(const b of document.querySelectorAll('.take [data-hear]')) b.addEventListener("click", () => hearTake(s.uid, b.dataset.hear));
-  for(const b of document.querySelectorAll('.take [data-del]')) b.addEventListener("click", async () => { try { const r = await api("/api/take", {uid:s.uid, part:S.n, delete:b.dataset.del}); if(r.part) setPart(r.part); } catch(e){ fail(e); } });
+  for(const b of document.querySelectorAll('.take [data-del]')) b.addEventListener("click", async () => {
+    const take = s.takes.find(t => t.tid === b.dataset.del);
+    if(take && take.chosen && !confirm("Убрать выбранный дубль? " + (s.draft ? "Фраза вернётся к черновой записи конвейера. " : "У фразы может не остаться выбранной записи. ") + "Файлы перейдут в корзину студии; Ctrl+Z вернёт дубль и выбор.")) return;
+    b.disabled = true;
+    try { commitFree(); if(S.ed && S.ed.dirty && await saveEd() === false){ b.disabled = false; return; } const r = await api("/api/take", {uid:s.uid, part:S.n, delete:b.dataset.del}); S.ed = null; if(r.part) setPart(r.part); toast("Дубль перемещён в корзину. Ctrl+Z вернёт файлы и выбор.", "ok"); }
+    catch(e){ b.disabled = false; fail(e); }
+  });
   for(const sel of document.querySelectorAll('.chg select[data-rule]')) sel.addEventListener("change", () => { if(sel.value) ruleDialog(s, changedWords(s)[+sel.dataset.rule], sel.value); sel.value = ""; });
   on("#synthAll", "click", synthAll);
   for(const b of document.querySelectorAll('.take [data-trim]')) b.addEventListener("click", () => trimDialog(s.uid, b.dataset.trim));
   on("#ownRec", "click", () => ownRecord(s.uid));
    on("#ownMic", "click", () => recordOwn(s.uid));
+  on("#oldV", "click", () => oldVoiceDialog(s.uid));
   on("#insAfter", "click", () => insertDialog(s.uid));
   on("#insEdit", "click", () => insertEditDialog(s.uid));
   on("#insDel", "click", () => insertDelete(s.uid));
@@ -1060,10 +1070,22 @@ async function unjoin(uid){
 // Точечный сброс: только эта фраза возвращается к тому, как её сделал конвейер. Без вопроса — отменяется одним Ctrl+Z.
 async function resetSeg(uid){
   try {
-    clearTimeout(saveT); if(S.ed) S.ed.dirty = false;
+    commitFree(); if(S.ed && S.ed.dirty && await saveEd() === false) return;
+    clearTimeout(saveT);
     const r = await api("/api/seg_reset", {uid, part:S.n});
     S.ed = null; S.free = false; if(r.part) setPart(r.part);
     toast("Правки фразы сброшены (" + r.reset.what + "): она снова как в книге, звучит черновая запись. Остальные фразы не тронуты. Отмена — Ctrl+Z.", "ok", 9000);
+  } catch(e){ fail(e); }
+}
+async function wipeSeg(uid){
+  const seg = segOf(uid); if(!seg) return;
+  if(!confirm("Убрать все дубли фразы № " + seg.id + " и сбросить её правки? Дубли вместе с описаниями уйдут в корзину студии; черновая запись конвейера останется. Ctrl+Z возвращает файлы, выбор и правки.")) return;
+  try {
+    commitFree(); if(S.ed && S.ed.dirty && await saveEd() === false) return;
+    clearTimeout(saveT);
+    const r = await api("/api/seg_wipe", {uid, part:S.n});
+    S.ed = null; S.free = false; if(r.part) setPart(r.part);
+    toast("Дубли перемещены в корзину: " + (r.takes || 0) + ". Правки фразы сброшены. Ctrl+Z возвращает файлы и правки.", "ok");
   } catch(e){ fail(e); }
 }
 // ---------------------------------------------------------------- текст книги в txt
@@ -1110,7 +1132,7 @@ async function insertDo(uid, voice){
     const r = await api("/api/insert", {after:uid, text, role, voice, part:S.n});
     S.ed = null; if(r.part) setPart(r.part);
     await select(r.uid, false); reveal(r.uid, true);
-    if(voice){ await pollJobs(); if(!S.engine.ready && !S.engine.starting) startEngine(); toast("Фраза вставлена и озвучивается — дубль появится через несколько секунд.", "ok"); }
+    if(voice){ await pollJobs(); if(!S.engine.ready && !S.engine.starting && !S.engine.pipeline_starting) startEngine(); toast("Фраза вставлена и озвучивается — дубль появится через несколько секунд.", "ok"); }
     else toast("Фраза вставлена. Озвучьте её («Озвучить заново», R) или дайте свою запись (U).", "ok", 9000);
   } catch(e){ fail(e); insertDialog(uid, text, role); }
 }
@@ -1250,8 +1272,9 @@ function micCancel(){
   if(m.audioCtx){try{m.audioCtx.close();}catch(e){}}
   if(m.rec.state!=="inactive"){m.rec.onstop=null;try{m.rec.stop();}catch(e){}}
 }
-const TR = {uid:null, tid:"", dur:0, t0:0, t1:0, v0:0, v1:0, peaks:[], auto:null, next:null, moved:false, drag:null, timer:0, play:null};
+const TR = {cuts:[], cutMode:false, uid:null, tid:"", dur:0, t0:0, t1:0, v0:0, v1:0, peaks:[], auto:null, next:null, moved:false, drag:null, timer:0, play:null};
 async function trimDialog(uid, tid){
+  commitFree(); if(S.ed && S.ed.dirty && await saveEd() === false) return;
   const s = segOf(uid); if(!s) return;
   if(s.locked){ toast("Фраза закреплена — снимите закрепление, чтобы обрезать запись.", "red"); return; }
   if(!tid && !s.draft){ toast("У этой фразы ещё нет записи — обрезать нечего.", "red"); return; }
@@ -1259,12 +1282,15 @@ async function trimDialog(uid, tid){
   try { d = await api("/api/take_peaks?uid=" + encodeURIComponent(uid) + "&tid=" + (tid || "")); } catch(e){ fail(e); return; }
   const tk = tid ? s.takes.find(x => x.tid === tid) : null;
   const name = !tid ? "черновая запись" : tk ? takeName(tk).toLowerCase() + (tk.name ? " «" + tk.name + "»" : "") : "дубль";
-  Object.assign(TR, {uid, tid:tid || "", dur:d.dur, peaks:d.peaks || [], t0:d.trim ? d.trim[0] : 0, t1:d.trim ? d.trim[1] : d.dur, auto:d.trim0 || null,
+  const sp = trimSpansOf(d.trim, d.dur);                       // сохранённая обрезка: один отрезок или несколько (между ними вырезано)
+  Object.assign(TR, {uid, tid:tid || "", dur:d.dur, peaks:d.peaks || [], t0:sp.length ? sp[0][0] : 0, t1:sp.length ? sp[sp.length - 1][1] : d.dur,
+                     cuts:sp.slice(1).map((q, i) => [sp[i][1], q[0]]), cutMode:false, auto:(trimSpansOf(d.trim0, d.dur)[0] || null),
                      next:d.next && !d.next.locked ? d.next : null, moved:false, drag:null, play:null});
-  const btns = [["Отмена"], ["Применить", trimApply, "pri"]];
-  if(TR.next) btns.splice(1, 0, ["Применить и перейти к фразе № " + TR.next.id, trimNext]);
+  if(TR.auto) TR.auto = [TR.auto[0], (trimSpansOf(d.trim0, d.dur).slice(-1)[0] || TR.auto)[1]];
+  const btns = [["Отмена"], ["Применить", trimApply, "pri", true]];
+  if(TR.next) btns.splice(1, 0, ["Применить и перейти к фразе № " + TR.next.id, trimNext, "", true]);
   dialog('<h3>Обрезка: ' + esc(name) + '</h3>'
-    + '<p class="note">Потяните края мышью или впишите секунды. Файл записи не меняется: обрезка — это два числа, её можно изменить или снять когда угодно.'
+    + '<p class="note">Потяните края мышью или впишите секунды. Чтобы убрать паузу или оговорку в середине, нажмите «Вырезать кусок» и проведите по волне; можно сделать несколько вырезов. Alt + перетаскивание тоже вырезает. Файл записи сохраняется целиком: обрезку можно изменить или снять.'
     + (tid ? "" : " У черновой записи конвейера обрезается её копия: она появится в списке дублей и встанет в часть.") + '</p>'
     + '<div class="trtext"><small>Фраза № ' + esc(s.id) + '</small>' + esc(s.text) + '</div>'
     + '<canvas id="trCv"></canvas>'
@@ -1272,19 +1298,26 @@ async function trimDialog(uid, tid){
     + '<span id="trLen" class="num"></span></div>'
     + '<div class="trrow" style="margin-top:10px"><button id="trPlay" title="Послушать то, что останется">▶ Прослушать</button>'
     + '<button id="trPause" title="Поставить конец на ближайшую паузу в записи; ещё раз — на следующую">До паузы</button>'
-    + '<button id="trAuto" title="Убрать тишину в начале и в конце">По тишине</button><button id="trAll" title="Снять обрезку: запись целиком">Целиком</button>'
+    + '<button id="trCut" title="Режим «вырезать»: проведите мышью по записи — выделенный кусок (пауза, оговорка, лишнее слово) уберётся из середины, а оба края останутся">✂ Вырезать кусок</button><button id="trUncut" title="Вернуть всё вырезанное из середины">Вернуть вырезанное</button><button id="trAuto" title="Убрать тишину в начале и в конце">По тишине</button><button id="trAll" title="Снять обрезку: запись целиком">Целиком</button>'
     + '<span class="grow"></span><button id="trZo" class="ghost" title="Мельче (колесо мыши)">−</button><button id="trZi" class="ghost" title="Крупнее (колесо мыши)">+</button><button id="trZa" class="ghost" title="Показать всю запись">вся запись</button></div>'
     + (TR.next ? '<div class="trtext nx"><small>Дальше в книге — фраза № ' + esc(TR.next.id) + '. Если вы начитали несколько фраз одним файлом, поставьте конец там, где кончается эта фраза, и нажмите «Применить и перейти»: следующая получит ту же запись с этого места.</small>' + esc(TR.next.text) + '</div>' : ""),
     btns);
   const c = $("#trCv"), at = e => { const r = c.getBoundingClientRect(); return TR.v0 + Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (TR.v1 - TR.v0); };
   const mv = e => { if(!TR.drag) return; TR.moved = true; if(TR.drag === "a") trimSet(at(e), TR.t1, "a", true); else trimSet(TR.t0, at(e), "b", true); };
-  c.onpointerdown = e => { const x = at(e); TR.drag = Math.abs(x - TR.t0) <= Math.abs(x - TR.t1) ? "a" : "b"; try { c.setPointerCapture(e.pointerId); } catch(z){} mv(e); };
-  c.onpointermove = mv; c.onpointerup = c.onpointercancel = () => { TR.drag = null; };
+  c.onpointerdown = e => {
+    const x = at(e);
+    if(TR.cutMode || e.altKey){ TR.drag = "c"; TR.cs = x; TR.ce = x; try { c.setPointerCapture(e.pointerId); } catch(z){} return; }
+    TR.drag = Math.abs(x - TR.t0) <= Math.abs(x - TR.t1) ? "a" : "b"; try { c.setPointerCapture(e.pointerId); } catch(z){} mv(e); };
+  c.onpointermove = e => { if(TR.drag === "c"){ TR.ce = at(e); trimDraw(); } else mv(e); };
+  c.onpointerup = () => { const cut = TR.drag === "c", a = TR.cs, b = TR.ce; TR.drag = null; if(cut) trimAddCut(a, b); else trimDraw(); };
+  c.onpointercancel = () => { TR.drag = null; trimDraw(); };
   c.addEventListener("wheel", e => { e.preventDefault(); if(e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)){ const dv = (TR.v1 - TR.v0) * 0.15 * Math.sign(e.deltaX || e.deltaY); trimView(TR.v0 + dv, TR.v1 + dv); } else trimZoom(e.deltaY < 0 ? 0.7 : 1 / 0.7, at(e)); }, {passive:false});
   $("#trA").onchange = e => { TR.moved = true; trimSet(+e.target.value || 0, TR.t1, "a"); };
   $("#trB").onchange = e => { TR.moved = true; trimSet(TR.t0, +e.target.value || TR.dur, "b"); };
   $("#trPlay").onclick = trimPlay;
-  $("#trAll").onclick = () => { trimSet(0, TR.dur); trimView(0, TR.dur); };
+  $("#trCut").onclick = () => { TR.cutMode = !TR.cutMode; $("#trCut").classList.toggle("pri", TR.cutMode); $("#trCv").style.cursor = TR.cutMode ? "crosshair" : ""; };
+  $("#trUncut").onclick = () => { TR.cuts = []; trimSet(TR.t0, TR.t1, "", true); };
+  $("#trAll").onclick = () => { TR.cuts = []; TR.moved = true; trimSet(0, TR.dur); trimView(0, TR.dur); };
   $("#trZi").onclick = () => trimZoom(0.6); $("#trZo").onclick = () => trimZoom(1 / 0.6); $("#trZa").onclick = () => trimView(0, TR.dur);
   $("#trPause").onclick = trimToPause;
   $("#trAuto").onclick = () => {
@@ -1298,6 +1331,48 @@ async function trimDialog(uid, tid){
   else { TR.v0 = 0; TR.v1 = TR.dur; }
   trimSet(TR.t0, TR.t1, "", true);
   $("#trPlay").focus();
+}
+function trimSpansOf(tr, dur){                                  // [a,b] или [[a,b],...] -> [[a,b],...]
+  if(!Array.isArray(tr) || !tr.length || !Number.isFinite(dur) || dur <= 0) return [];
+  const raw = Array.isArray(tr[0]) ? tr : [tr], out = [];
+  for(const q of raw){
+    if(!Array.isArray(q) || q.length !== 2 || !Number.isFinite(+q[0]) || !Number.isFinite(+q[1])) continue;
+    const a = Math.max(0, Math.min(+q[0], dur)), b = Math.max(0, Math.min(+q[1], dur));
+    if(b - a >= 0.02 - 1e-9) out.push([a, b]);
+  }
+  const merged = [];
+  for(const q of out.sort((x, y) => x[0] - y[0])){
+    const last = merged[merged.length - 1];
+    if(last && q[0] <= last[1]) last[1] = Math.max(last[1], q[1]); else merged.push(q);
+  }
+  return merged;
+}
+function trimAddCut(a, b){                                      // новый вырез: внутри оставляемого отрезка, склеивается с соседними
+  if(a > b) [a, b] = [b, a];
+  a = Math.max(a, TR.t0); b = Math.min(b, TR.t1);
+  if(b - a < 0.03) return;
+  const all = TR.cuts.concat([[a, b]]).sort((x, y) => x[0] - y[0]), m = [];
+  for(const q of all){ if(m.length && q[0] <= m[m.length - 1][1] + 0.02) m[m.length - 1][1] = Math.max(m[m.length - 1][1], q[1]); else m.push([q[0], q[1]]); }
+  TR.cuts = m.map(q => [Math.round(q[0] * 1000) / 1000, Math.round(q[1] * 1000) / 1000]);
+  TR.moved = true; trimSet(TR.t0, TR.t1, "", true);
+}
+function trimKept(){                                            // оставляемые куски = [t0,t1] без вырезов
+  const out = []; let p = TR.t0;
+  for(const q of TR.cuts.slice().sort((a, b) => a[0] - b[0])){
+    const a = Math.max(q[0], TR.t0), b = Math.min(q[1], TR.t1); if(b <= a) continue;
+    if(a - p >= 0.02 - 1e-9) out.push([p, a]); p = Math.max(p, b);
+  }
+  if(TR.t1 - p >= 0.02 - 1e-9) out.push([p, TR.t1]);
+  return out;
+}
+function trimBody(){
+  const spans = trimKept();
+  if(!spans.length) throw new Error("После вырезов не осталось звука. Верните вырезанное или измените края — прежняя запись сохранена.");
+  const whole = spans.length === 1 && spans[0][0] < 0.005 && TR.dur - spans[0][1] < 0.005;
+  // Наличие выреза не зависит от числа оставшихся кусков. Один кусок тоже передаётся явно.
+  return TR.cuts.length
+    ? {uid:TR.uid, tid:TR.tid, spans, t0:spans[0][0], t1:spans[spans.length - 1][1], part:S.n}
+    : {uid:TR.uid, tid:TR.tid, t0:whole ? null : TR.t0, t1:whole ? null : TR.t1, part:S.n};
 }
 function trimView(a, b){
   const len = Math.max(Math.min(1.5, TR.dur), Math.min(TR.dur, b - a));
@@ -1313,7 +1388,9 @@ function trimSet(a, b, from, keepView){
   TR.t0 = Math.round(a * 1000) / 1000; TR.t1 = Math.round(b * 1000) / 1000;
   const A = $("#trA"), B = $("#trB"); if(!A) return;
   A.value = TR.t0.toFixed(2); B.value = TR.t1.toFixed(2); A.max = B.max = TR.dur.toFixed(2);
-  $("#trLen").textContent = "останется " + (TR.t1 - TR.t0).toFixed(2) + " с из " + TR.dur.toFixed(2);
+  const kept = trimKept().reduce((t, q) => t + q[1] - q[0], 0);
+  $("#trLen").textContent = "останется " + kept.toFixed(2) + " с из " + TR.dur.toFixed(2) + (TR.cuts.length ? " (вырезов: " + TR.cuts.length + ")" : "");
+  const U = $("#trUncut"); if(U) U.hidden = !TR.cuts.length;
   if(!keepView && (TR.t0 < TR.v0 || TR.t1 > TR.v1)){ const m = Math.max(0.8, (TR.t1 - TR.t0) * 0.2); trimView(TR.t0 - m, Math.max(TR.t1 + m, TR.t0 - m + (TR.v1 - TR.v0))); }
   else trimDraw();
 }
@@ -1343,9 +1420,11 @@ function trimDraw(){
     const ta = TR.v0 + px / w * span, tb = TR.v0 + (px + 1) / w * span;
     let i0 = Math.floor(ta / TR.dur * n), i1 = Math.max(i0 + 1, Math.ceil(tb / TR.dur * n)), m = 0;
     for(let i = Math.max(0, i0); i < Math.min(n, i1); i++) if(TR.peaks[i] > m) m = TR.peaks[i];
-    const inside = (ta + tb) / 2 >= TR.t0 && (ta + tb) / 2 <= TR.t1, amp = Math.max(0.6, m * (mid - 8));
+    const tm = (ta + tb) / 2, inside = tm >= TR.t0 && tm <= TR.t1 && !TR.cuts.some(q => tm >= q[0] && tm <= q[1]), amp = Math.max(0.6, m * (mid - 8));
     g.globalAlpha = inside ? 0.86 : 0.32; g.fillStyle = inside ? ink : soft; g.fillRect(px, mid - amp, 1, amp * 2);
   }
+  g.globalAlpha = 0.22; g.fillStyle = css("--red");
+  for(const q of TR.cuts.concat(TR.drag === "c" ? [[Math.min(TR.cs, TR.ce), Math.max(TR.cs, TR.ce)]] : [])){ const X0 = Math.max(0, x(q[0])), X1 = Math.min(w, x(q[1])); if(X1 > X0) g.fillRect(X0, 0, X1 - X0, h); }
   g.globalAlpha = 1; g.fillStyle = css("--stamp");
   for(const v of [TR.t0, TR.t1]){ const X = x(v); if(X < -6 || X > w + 6) continue; g.fillRect(X - 1, 0, 2, h); g.fillRect(X - 5, 0, 10, 13); g.fillRect(X - 5, h - 13, 10, 13); }
   if(TR.play != null){ g.fillStyle = css("--red"); g.fillRect(x(TR.play) - 0.75, 0, 1.5, h); }
@@ -1354,35 +1433,45 @@ function trimDraw(){
 }
 function trimPlay(){
   if(TR.timer){ trimStop(); return; }
+  const kept = trimKept();
+  if(!kept.length){ toast("После вырезов не осталось звука. Верните вырезанное или измените края.", "red"); return; }
   au.pause();
-  aux.src = (TR.tid ? "/audio/take?uid=" + encodeURIComponent(TR.uid) + "&tid=" + TR.tid : "/audio/draft?uid=" + encodeURIComponent(TR.uid)) + "&t=" + Date.now();
-  aux.addEventListener("loadedmetadata", () => { try { aux.currentTime = TR.t0; } catch(e){} aux.play().catch(()=>{}); }, {once:true});
+  aux.src = (TR.tid ? "/audio/take?uid=" + encodeURIComponent(TR.uid) + "&tid=" + encodeURIComponent(TR.tid) : "/audio/draft?uid=" + encodeURIComponent(TR.uid)) + "&t=" + Date.now();
+  aux.addEventListener("loadedmetadata", () => { if(!TR.timer) return; try { aux.currentTime = kept[0][0]; } catch(e){} aux.play().catch(e => { trimStop(); fail(e); }); }, {once:true});
   aux.load();
   $("#trPlay").textContent = "■ Стоп";
   TR.timer = setInterval(() => {
-    if($("#veil").hidden || !$("#trCv") || aux.ended || aux.currentTime >= TR.t1 - 0.01){ trimStop(); return; }
+    if($("#veil").hidden || !$("#trCv") || aux.ended || aux.currentTime >= kept[kept.length - 1][1] - 0.01){ trimStop(); return; }
+    const ct = aux.currentTime, next = kept.find(q => ct < q[1] - 0.01);
+    if(next && ct < next[0]){ try { aux.currentTime = next[0]; } catch(e){} }
     TR.play = aux.currentTime >= TR.t0 ? aux.currentTime : null; trimDraw();
   }, 40);
 }
 function trimStop(){ clearInterval(TR.timer); TR.timer = 0; TR.play = null; aux.pause(); const b = $("#trPlay"); if(b) b.textContent = "▶ Прослушать"; trimDraw(); }
 async function trimApply(){
   trimStop();
-  const whole = TR.t0 < 0.005 && TR.dur - TR.t1 < 0.005;
   try {
-    const r = await api("/api/take_trim", {uid:TR.uid, tid:TR.tid, t0: whole ? null : TR.t0, t1: whole ? null : TR.t1, part:S.n});
+    const body = trimBody(), kept = trimKept(), whole = body.t0 === null;
+    trimBusy(true);
+    const r = await api("/api/take_trim", body);
     S.ed = null; if(r.part) setPart(r.part);
-    toast(whole ? "Запись звучит целиком." : "Обрезано: звучит отрезок " + TR.t0.toFixed(2) + "–" + TR.t1.toFixed(2) + " с. Ctrl+Z отменяет.", "ok");
-  } catch(e){ fail(e); }
+    closeDialog();
+    toast(whole ? "Запись звучит целиком." : "Обрезка сохранена: " + kept.length + (kept.length === 1 ? " отрезок, " : " отрезка, ") + kept.reduce((n, q) => n + q[1] - q[0], 0).toFixed(2) + " с звука. Ctrl+Z отменяет.", "ok");
+  } catch(e){ fail(e); } finally { trimBusy(false); }
 }
 async function trimNext(){                                     // одна запись на несколько фраз: эта обрезана — следующая берёт запись с этого места
   trimStop();
   try {
-    const r = await api("/api/take_next", {uid:TR.uid, tid:TR.tid, t0:TR.t0, t1:TR.t1, part:S.n});
+    const body = trimBody();
+    trimBusy(true);
+    const r = await api("/api/take_next", body);
     S.ed = null; if(r.part) setPart(r.part);
+    closeDialog();
     await select(r.uid, false); reveal(r.uid, true);
     await trimDialog(r.uid, r.tid);
-  } catch(e){ fail(e); }
+  } catch(e){ fail(e); } finally { trimBusy(false); }
 }
+function trimBusy(busy){ if(!$("#trCv")) return; for(const b of document.querySelectorAll("#dlg .foot button")) b.disabled = busy; }
 window.addEventListener("resize", trimDraw);
 // ---------------------------------------------------------------- проект: сохранить в файл, загрузить из файла
 const szf = b => b >= 1e9 ? (b / 1e9).toFixed(2) + " ГБ" : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + " МБ" : Math.max(1, Math.round(b / 1e3)) + " КБ";
@@ -1498,13 +1587,13 @@ async function synth(uid){
     if(r.rids && r.rids.length > 1) toast(sc === "x3" ? "Заказано три варианта — выберите лучший в списке дублей." : "Переозвучивается фраз: " + r.rids.length + ".");
     S.engine = r.engine; if(r.part) setPart(r.part);
     await pollJobs();
-    if(!S.engine.ready && !S.engine.starting) startEngine();
+    if(!S.engine.ready && !S.engine.starting && !S.engine.pipeline_starting) startEngine();
   } catch(e){ fail(e); }
 }
 async function synthAll(){
   try { const r = await api("/api/synth_stale", {part:S.n}); S.engine = r.engine; setPart(r.part); await pollJobs();
         toast("Заявок на переозвучку: " + r.rids.length, "blue");
-        if(!S.engine.ready && !S.engine.starting) startEngine(); }
+        if(!S.engine.ready && !S.engine.starting && !S.engine.pipeline_starting) startEngine(); }
   catch(e){ fail(e); }
 }
 async function chooseTake(uid, tid){
@@ -1846,34 +1935,165 @@ async function uploadSound(file){
 function pickFromPC(){ return new Promise(res => { const f = $("#sndFile"); f.value = ""; f.onchange = () => res(f.files && f.files[0] ? f.files[0] : null); f.click(); }); }
 const SND_KIND = {mus:"музыка", amb:"фон", sfx:"звук", dlg:"вставка игры"};
 // hint — с чего начать поиск (подпись заглушки): сразу видны похожие звуки и другие варианты того же; набор с клавиатуры его заменяет
+async function oldVoiceDialog(uid, offset=0){
+  commitFree(); if(S.ed && S.ed.dirty && await saveEd() === false) return;
+  const current = segOf(uid); if(!current) return;
+  if(current.locked){ toast("Фраза закреплена — снимите закрепление перед возвратом дубля.", "red"); return; }
+  let result;
+  try { result = await api("/api/old_voice?uid=" + encodeURIComponent(uid) + "&limit=100&offset=" + Math.max(0, offset)); } catch(e){ fail(e); return; }
+  const items = result.items || [], part = S.n;
+  const position = Number.isFinite(result.offset) ? result.offset : offset, buttons = [["Закрыть"]];
+  if(position > 0) buttons.push(["← Предыдущие записи", () => oldVoiceDialog(uid, Math.max(0, position - 100))]);
+  if(Number.isFinite(result.next)) buttons.push(["Следующие записи →", () => oldVoiceDialog(uid, result.next)]);
+  dialog('<h3>Сравнить прежние озвучки — фраза № ' + esc(current.id) + '</h3>'
+    + '<p class="note">Здесь показаны подходящие записи прежних редакций и сохранившиеся дубли Studio. Процент сходства помогает искать, но не подтверждает правильность записи: сравните текст, роль и звук. Возврат добавляет отдельный дубль; прежняя запись сохраняется рядом.</p>'
+    + (result.total > items.length || result.truncated ? '<p class="note">Показаны записи ' + (items.length ? position + 1 : 0) + '–' + (position + items.length) + (result.total ? ' из ' + result.total : '') + '. Сначала — наиболее похожие.</p>' : '')
+    + (result.errors && result.errors.length ? '<details><summary>Часть истории не прочитана: ' + result.errors.length + '</summary><p class="note">' + result.errors.map(e => esc(typeof e === 'string' ? e : (e.file || '') + ': ' + (e.error || 'ошибка чтения'))).join('<br>') + '</p></details>' : '')
+    + '<div class="trtext"><small>Сейчас в книге · ' + esc(roleName(current.role)) + '</small>' + esc(current.text)
+    + (current.draft || (current.takes || []).length ? '<div class="tools"><button id="oldCurrent">Слушать выбранную запись</button></div>' : '') + '</div>'
+    + '<div class="snds oldvoices">' + (items.map((v, k) => {
+      const raw = v.source_raw || v.raw || v.text || "", role = v.role ? roleName(v.role) : "роль не указана";
+      const label = v.exact ? "текст совпадает" : "сходство текста " + Math.round((+v.ratio || 0) * 100) + " %";
+      return '<div class="oldvoice" data-old="' + k + '"><div class="trtext"><small>' + (v.source_kind === 'pipeline' ? 'Озвучка прежней редакции' : 'Прежний дубль Studio') + ' · ' + esc(role) + (v.at ? ' · ' + esc(v.at) : '') + '</small>' + esc(raw) + '</div>'
+        + '<p class="note">' + label + (v.dur ? ' · ' + Number(v.dur).toFixed(1) + ' с' : '') + (v.ambiguous ? ' · несколько подходящих записей: выбор вручную' : '')
+        + (v.provenance_complete === false ? ' · исходная редакция подтверждена не полностью: выбирайте только после прослушивания' : '')
+        + (v.tech_match === false ? ' · текст для озвучки отличается или не подтверждён' : '')
+        + (v.provenance_ambiguous ? ' · одна запись связана с несколькими прежними местами' : '')
+        + (!v.role ? ' · роль неизвестна: автоматический выбор запрещён' : current.role && v.role !== current.role ? ' · роль отличается от нынешней' : '') + '</p>'
+        + '<div class="tools"><button data-old-play>' + ICON.play + ' Слушать прежнюю</button><button data-old-add>Добавить дублем</button><button data-old-pick class="pri">Добавить и выбрать</button></div></div>';
+    }).join("") || '<p class="note" style="padding:8px">Подходящих записей в доступной истории не найдено. Отсутствующий файл или редакцию, не сохранённую в истории, этот поиск восстановить не может.</p>') + '</div>', buttons);
+  $("#dlg").classList.add("wide");
+  const nowButton = $("#oldCurrent"); if(nowButton) nowButton.onclick = () => { const take = (current.takes || []).find(t => t.chosen); hearTake(uid, take ? take.tid : ""); };
+  for(const row of document.querySelectorAll("#dlg [data-old]")){
+    const v = items[+row.dataset.old];
+    row.querySelector("[data-old-play]").onclick = () => { au.pause(); aux.src = "/audio/oldtake?sid=" + encodeURIComponent(v.sid) + "&tid=" + encodeURIComponent(v.tid); aux.volume = 1; aux.play().catch(fail); };
+    const adopt = async choose => {
+      if(S.n !== part){ toast("Открыта другая часть. Повторите сравнение для нужной фразы.", "red"); return; }
+      const uncertain = v.auto_safe !== true || !v.exact || v.ambiguous || v.provenance_complete === false || !v.role || (current.role && v.role !== current.role);
+      if(choose && uncertain && !confirm("Вы прослушали обе записи и проверили текст и роль? У совпадения есть неоднозначность. Выбрать этот дубль для текущей фразы?")) return;
+      const buttons = [...document.querySelectorAll("#dlg button")]; buttons.forEach(b => b.disabled = true);
+      try {
+        const r = await api("/api/old_voice_adopt", {uid, sid:v.sid, tid:v.tid, choose, part});
+        S.ed = null; if(r.part) setPart(r.part); closeDialog();
+        toast((r.dup ? "Такой дубль у фразы уже есть" : "Прежняя запись добавлена дублем") + ((r.selected === undefined ? choose : r.selected) ? " и выбрана" : "") + ". Исходная запись сохранена. Ctrl+Z отменяет.", "ok");
+      } catch(e){ fail(e); } finally { buttons.forEach(b => b.disabled = false); }
+    };
+    row.querySelector("[data-old-add]").onclick = () => adopt(false);
+    row.querySelector("[data-old-pick]").onclick = () => adopt(true);
+  }
+}
+async function oldVoiceAuto(){
+  if(!S.n || !confirm("Подобрать прежние записи для фраз текущей части без записи? Автоматически принимаются только точное совпадение исходного текста и текста для озвучки, известная совпадающая роль и единственный подходящий дубль. Остальное останется для ручного сравнения.")) return;
+  const part = S.n;
+  try {
+    const r = await api("/api/old_voice_auto", {part});
+    S.ed = null; if(r.part && S.n === part) setPart(r.part); closeDialog();
+    toast("Возвращено прежних записей: " + (r.got || 0) + ". Для ручного сравнения пропущено: " + (r.skipped || 0) + "." + (r.got ? " Ctrl+Z отменяет по одной фразе." : ""), r.got ? "ok" : "", 11000);
+  } catch(e){ fail(e); }
+}
+function soundScanNote(scan){
+  if(!scan) return "";
+  const errors = Array.isArray(scan.errors) ? scan.errors.length : (+scan.errors || 0);
+  return (scan.limited ? "Индекс ограничен: просмотрено " + (scan.visited || 0) + " записей. Для полного выбора подключите более узкую папку. " : "")
+    + (errors ? "Не удалось прочитать файлов или папок: " + errors + ". " : "");
+}
 function soundDialog(title, onChoose, kind, hint){
-  dialog('<h3>' + esc(title) + '</h3><input id="sq" type="search" placeholder="Поиск по-русски или по имени файла: дверь, шаги, волк, прибой, door…" autocomplete="off"><div class="snds" id="slist"></div><p class="note" id="sinfo"></p>',
-    [["Отмена"], ["Открыть файл с ПК…", async () => { const f = await pickFromPC(); if(!f) return; try { const s = await uploadSound(f); onChoose(s); } catch(e){ fail(e); } }, "pri"]]);
-  const q = $("#sq"), list = $("#slist"); let timer = 0, seq = 0, first = !!hint;
+  dialog('<h3>' + esc(title) + '</h3><input id="sq" type="search" placeholder="Поиск по-русски или по имени файла: дверь, шаги, волк, прибой, door…" autocomplete="off">'
+    + '<div class="sectabs" id="ssec"></div><div class="sectabs grp" id="sgrp"></div><div class="snds" id="slist"></div>'
+    + '<div class="trrow"><button id="sPrev">← Назад</button><span id="sPage" class="num"></span><button id="sNext">Далее →</button><span class="grow"></span><button id="sRefresh" title="Заново прочитать подключённые папки: новые файлы появятся в каталоге">Обновить каталог</button></div><p class="note" id="sinfo" aria-live="polite"></p>',
+    [["Отмена"], ["Папки со звуками…", () => soundRootDialog(() => soundDialog(title, onChoose, kind, hint))], ["Открыть файл с ПК…", async () => {
+      const f = await pickFromPC(); if(!f) return;
+      try { const snd = await uploadSound(f); await onChoose(snd); } catch(e){ fail(e); }
+    }, "pri"]]);
+  const q = $("#sq"), list = $("#slist"), secBox = $("#ssec"), grpBox = $("#sgrp"), info = $("#sinfo"), prev = $("#sPrev"), next = $("#sNext"), page = $("#sPage"), refresh = $("#sRefresh");
+  let timer = 0, seq = 0, first = !!hint, SEC = "", GRP = "", TREE = null, offset = 0, nextOffset = null, items = [], busy = false;
+  const limit = 80, alive = () => q.isConnected && !$("#veil").hidden;
   if(hint) q.value = hint;
-  const load = async () => {
-    const my = ++seq;
-    try {
-      const r = await api("/api/sounds?q=" + encodeURIComponent(q.value) + "&kind=" + encodeURIComponent(kind || ""));
-      if(my !== seq) return;
-      if(first && !r.total){ first = false; q.value = ""; return load(); }     // по подписи ничего похожего — показать всю библиотеку
-      first = false;
-      list.innerHTML = r.sounds.map(s => {
-          const ttl = s.title || s.name, sub = s.lib === "my" ? "" : [s.sub, s.name !== ttl ? s.name : ""].filter(Boolean).join(" · ");
-          return '<div class="snd" data-f="' + esc(s.file) + '" data-name="' + esc(ttl) + '"><button class="ghost" data-play title="Прослушать">' + ICON.play + '</button><span>' + esc(ttl) + (sub ? '<i>' + esc(sub) + '</i>' : "") + '</span><small>'
-            + (s.lib === "my" ? "мой файл" : (SND_KIND[s.kind] || "комплект")) + (s.dur ? ", " + s.dur.toFixed(1) + " с" : "") + '</small></div>'; }).join("")
-        || '<p class="note">Ничего не найдено. Попробуйте другое слово («дверь», «шаги», «гибель», «колокол») или откройте файл с компьютера — он попадёт в библиотеку книги.</p>';
-      $("#sinfo").textContent = (r.fixed ? "Раскладка исправлена: искал «" + r.fixed + "». " : "") + (r.partial ? "Все слова разом не нашлись — показаны похожие. " : "")
-        + (r.total > r.sounds.length ? "Показаны первые " + r.sounds.length + " из " + r.total + " — уточните поиск." : (r.total ? "Звуков: " + r.total + (r.kit ? ". Комплект: " + r.kit : "") : ""));
-    } catch(e){ fail(e); }
+  const drawTabs = () => {
+    if(!TREE || !alive()) return;
+    const sections = Array.isArray(TREE.sections) ? TREE.sections : [];
+    secBox.innerHTML = '<button data-sec="" class="' + (!SEC ? "on" : "") + '">Все разделы</button>' + sections.map(x => '<button data-sec="' + esc(x.sec) + '" class="' + (SEC === x.sec ? "on" : "") + '">' + esc(x.sec) + ' <small>' + (+x.n || 0) + '</small></button>').join("");
+    const cur = sections.find(x => x.sec === SEC), groups = cur && Array.isArray(cur.groups) ? cur.groups : [];
+    grpBox.innerHTML = groups.length ? '<button data-grp="" class="' + (!GRP ? "on" : "") + '">Весь раздел</button>' + groups.map(g => '<button data-grp="' + esc(g.grp) + '" class="' + (GRP === g.grp ? "on" : "") + '">' + esc(g.grp) + ' <small>' + (+g.n || 0) + '</small></button>').join("") : "";
   };
-  q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(load, 220); });
-  list.addEventListener("click", e => {
-    const row = e.target.closest(".snd"); if(!row) return;
-    if(e.target.closest("[data-play]")){ au.pause(); aux.src = "/audio/sound?f=" + encodeURIComponent(row.dataset.f); aux.volume = 1; aux.play().catch(()=>{}); return; }
-    aux.pause(); closeDialog(); onChoose({file:row.dataset.f, name:row.dataset.name});
+  const loadTree = async () => { TREE = await api("/api/sound_tree"); drawTabs(); };
+  const load = async (at = 0) => {
+    const my = ++seq; offset = Math.max(0, at); busy = true; prev.disabled = next.disabled = true; info.textContent = "Загружаю звуки…";
+    try {
+      const r = await api("/api/sounds?q=" + encodeURIComponent(q.value) + "&kind=" + encodeURIComponent(kind || "") + "&sec=" + encodeURIComponent(SEC) + "&grp=" + encodeURIComponent(GRP) + "&offset=" + offset + "&limit=" + limit);
+      if(my !== seq || !alive()) return;
+      if(first && !r.total && !SEC){ first = false; q.value = ""; return load(0); }
+      first = false; items = r.sounds || [];
+      offset = Number.isFinite(r.offset) ? r.offset : offset;
+      nextOffset = r.next === null ? null : Number.isFinite(r.next) ? r.next : offset + items.length < r.total ? offset + items.length : null;
+      list.innerHTML = items.map((snd, k) => {
+        const ttl = snd.title || snd.name || "Без названия", sub = [snd.sub, snd.name !== ttl ? snd.name : ""].filter(Boolean).join(" · ");
+        return '<div class="snd" data-k="' + k + '"><button class="ghost" data-play title="Прослушать «' + esc(ttl) + '»">' + ICON.play + '</button><span>' + esc(ttl) + (sub ? '<i>' + esc(sub) + '</i>' : "") + '</span><small>'
+          + (snd.lib === "my" ? "мой файл" : snd.lib === "ext" ? "моя папка" : (SND_KIND[snd.kind] || "комплект")) + (snd.dur ? ", " + Number(snd.dur).toFixed(1) + " с" : "") + '</small><button data-use>Выбрать</button></div>';
+      }).join("") || '<p class="note" style="padding:8px">Ничего не найдено. Уточните раздел или слово, подключите папку либо откройте файл с компьютера.</p>';
+      list.scrollTop = 0;
+      page.textContent = r.total ? (offset + 1) + "–" + (offset + items.length) + " из " + r.total : "0 звуков";
+      prev.disabled = offset === 0; next.disabled = nextOffset == null;
+      info.textContent = (r.fixed ? "Раскладка исправлена: «" + r.fixed + "». " : "") + (r.partial ? "Все слова разом не нашлись — показаны похожие. " : "")
+        + soundScanNote(r.scan || (TREE && TREE.scan)) + (r.kit ? "Комплект: " + r.kit + ". " : "") + "Сначала прослушайте звук, затем нажмите «Выбрать».";
+    } catch(e){ if(my === seq && alive()){ info.textContent = "Не удалось загрузить каталог: " + e.message; fail(e); } }
+    finally { if(my === seq) busy = false; }
+  };
+  secBox.addEventListener("click", e => { const b = e.target.closest("[data-sec]"); if(!b) return; SEC = b.dataset.sec; GRP = ""; first = false; drawTabs(); load(0); });
+  grpBox.addEventListener("click", e => { const b = e.target.closest("[data-grp]"); if(!b) return; GRP = b.dataset.grp; first = false; drawTabs(); load(0); });
+  q.addEventListener("input", () => { first = false; clearTimeout(timer); seq++; timer = setTimeout(() => { if(alive()) load(0); }, 220); });
+  prev.onclick = () => { if(!busy) load(Math.max(0, offset - limit)); };
+  next.onclick = () => { if(!busy && nextOffset != null) load(nextOffset); };
+  refresh.onclick = async () => {
+    refresh.disabled = true; info.textContent = "Обновляю каталог…";
+    try { await api("/api/sound_refresh", {}); if(!alive()) return; await loadTree(); await load(0); }
+    catch(e){ if(alive()) fail(e); } finally { refresh.disabled = false; }
+  };
+  list.addEventListener("click", async e => {
+    const row = e.target.closest(".snd"); if(!row || busy) return;
+    const snd = items[+row.dataset.k]; if(!snd) return;
+    if(e.target.closest("[data-play]")){ au.pause(); aux.src = "/audio/sound?f=" + encodeURIComponent(snd.file); aux.volume = 1; aux.play().catch(fail); return; }
+    if(!e.target.closest("[data-use]")) return;
+    aux.pause(); closeDialog();
+    try { await onChoose(Object.assign({}, snd, {name:snd.title || snd.name})); } catch(err){ fail(err); }
   });
-  load(); q.focus(); q.select();
+  loadTree().catch(e => { if(alive()) fail(e); }); load(0); q.focus(); q.select();
+}
+async function soundRootDialog(back){
+  let t; try { t = await api("/api/sound_tree"); } catch(e){ fail(e); return; }
+  const roots = t.roots || [];
+  dialog('<h3>Папки со звуками</h3><p class="note">Подключите папку с эффектами, музыкой или звуками игры. Файлы остаются на месте; студия читает их для прослушивания и сборки. Разделы и подписи помогают искать по-русски, исходное имя файла показано рядом.</p>'
+    + '<div class="snds" style="min-height:0">' + (roots.map((r, k) => '<div class="snd"><span>' + esc(r.name || r.path) + '<i>' + esc(r.path) + '</i></span><button class="ghost" data-root-del="' + k + '">Отключить</button></div>').join("") || '<p class="note" style="padding:8px">Пока ничего не подключено.</p>') + '</div>'
+    + '<p class="note">' + esc(soundScanNote(t.scan)) + '</p><label class="f" for="srPath">Полный путь к папке</label><input id="srPath" type="text" placeholder="D:\\Games\\Nox\\sound" autocomplete="off">'
+    + '<label class="f" for="srName">Название раздела (необязательно)</label><input id="srName" type="text" placeholder="Звуки игры" autocomplete="off">',
+    [["Назад", () => { if(back) back(); }], ["Подключить", async () => {
+      const path = $("#srPath").value.trim(), name = $("#srName").value.trim();
+      if(!path){ $("#srPath").focus(); toast("Укажите полный путь к папке.", "red"); return; }
+      const buttons = [...document.querySelectorAll("#dlg .foot button")]; buttons.forEach(b => b.disabled = true);
+      try { const r = await api("/api/sound_root", {path, name}); toast("Папка подключена. Звуков в каталоге: " + r.files, "ok"); await soundRootDialog(back); }
+      catch(e){ fail(e); } finally { buttons.forEach(b => b.disabled = false); }
+    }, "pri", true]]);
+  for(const b of document.querySelectorAll("#dlg [data-root-del]")) b.onclick = async () => {
+    const r = roots[+b.dataset.rootDel];
+    if(!confirm("Отключить папку «" + (r.name || r.path) + "»? Звуки из неё на дорожках могут перестать открываться. Исходные файлы останутся на диске.")) return;
+    b.disabled = true;
+    try { await api("/api/sound_root", {id:r.id, delete:true}); await soundRootDialog(back); }
+    catch(e){ b.disabled = false; fail(e); }
+  };
+}
+function soundCatalog(){                                        // вставка на выбранную неголосовую дорожку у курсора
+  if(!S.part){ toast("Сначала откройте часть книги."); return; }
+  const t = now(), part = S.n;
+  soundDialog("Каталог звуков — вставка на дорожку", async snd => {
+    if(S.n !== part){ toast("Открыта другая часть. Выберите место вставки снова.", "red"); return; }
+    const kind = snd.kind && ["sfx", "amb", "mus"].includes(snd.kind) ? snd.kind : "sfx";
+    const insert = async k => {
+      if(S.n !== part){ toast("Открыта другая часть. Выберите место вставки снова.", "red"); return; }
+      await cueAdd(k, t, {file:snd.file, label:snd.name.replace(/\.[^.]+$/, ""), len:k === "sfx" ? null : Math.min(Math.max(snd.dur || 30, 5), 900)});
+    };
+    dialog('<h3>На какую дорожку?</h3><p>«' + esc(snd.name) + '» встанет в ' + fmt(t) + ' части ' + part + '.</p>',
+      [["Отмена"], ["Звук", () => insert("sfx"), kind === "sfx" ? "pri" : ""], ["Фон", () => insert("amb"), kind === "amb" ? "pri" : ""], ["Музыка", () => insert("mus"), kind === "mus" ? "pri" : ""]]);
+  }, "", "");
 }
 // ---- действия с заглушкой
 async function cueSet(id, body){ try { const r = await api("/api/cue", Object.assign({part:S.n, id}, body)); setPart(r.part); return r; } catch(e){ fail(e); drawInsp(); } }
@@ -1889,6 +2109,14 @@ async function cueScan(fresh){
     S.showCues = true; setPart(r.part); applyCues(true);
     toast(r.new ? "Найдено мест для звуков и музыки: " + r.new + ". Это заглушки: щёлкните полоску и выберите файл." : (r.found ? "Новых мест не найдено (все " + r.found + " уже предлагались)." : "В тексте этой части мест для звуков не нашлось."), r.new ? "ok" : "",
       9000, !r.new && r.found ? ["Найти заново", () => cueScan(true)] : null);
+  } catch(e){ fail(e); }
+}
+async function cueScanAll(){
+  try {
+    toast("Ищу места для звуков во всех собранных частях…");
+    const r = await api("/api/cues_scan_all", {});
+    if(S.n){ const part = S.n, v = await api("/api/part?n=" + part); if(S.n === part){ S.showCues = true; setPart(v); applyCues(true); } }
+    toast("Частей просмотрено: " + (r.parts || 0) + ", новых заглушек: " + (r.new || 0) + (r.failed && r.failed.length ? ". Не открылись: " + r.failed.length : "") + ". Заглушки без файла молчат — выберите звук.", r.failed && r.failed.length ? "red" : "ok", 11000);
   } catch(e){ fail(e); }
 }
 async function assignSound(c, snd){
@@ -1974,7 +2202,7 @@ function soundsHTML(p){
   if(envC.length) h += '<p class="note" style="margin:0 0 8px">Звуков с участками своей громкости: ' + envC.length + '. <button id="envFirst" class="ghost">Показать</button></p>';
   h += '<h3 class="sub">Версии готовых файлов</h3><div class="vers"><label class="chk"><input type="checkbox" checked disabled> только голос</label>'
       + MIX_VARS.map(v => '<label class="chk"><input type="checkbox" data-var="' + v[0] + '"' + ((p.mix.vars || {})[v[0]] !== false ? " checked" : "") + '> ' + v[1] + '</label>').join("") + '</div>';
-  h += '<div class="acts"><button id="cuScan">Найти места по тексту</button><button id="cuAddS">+ звук</button><button id="cuAddA">+ фон</button><button id="cuAddM">+ музыка</button></div>';
+  h += '<div class="acts"><button id="cuCat" title="Поиск по разделам и описаниям: существа, заклинания, предметы, действия; вставка на дорожку в место курсора">Каталог звуков…</button><button id="cuScan">Найти места по тексту</button><button id="cuScanAll" title="Искать места для звуков во всех собранных частях; существующие звуковые отметки сохраняются">Найти во всех частях</button><button id="cuAddS">+ звук</button><button id="cuAddA">+ фон</button><button id="cuAddM">+ музыка</button></div>';
   if(S.score && S.score.have) h += '<div class="acts"><button id="cuKit">' + (S.score.on_lanes ? "Обновить партитуру книги" : "Взять партитуру книги") + '</button></div>';
   if(S.score && S.score.busy) h += '<p class="note">Распаковывается новый звуковой комплект из Загрузок: ' + S.score.busy.pct + ' %. Прежний остаётся на месте.</p>';
   else if(S.score && S.score.error) h += '<p class="note">Новый звуковой комплект не распаковался: ' + esc(S.score.error) + '. Работаю с прежним. <button id="kitUnpack" class="ghost">Попробовать ещё раз</button></p>';
@@ -1994,6 +2222,8 @@ function bindSounds(p){
   const on = (sel, ev, fn) => { const e = $(sel); if(e) e.addEventListener(ev, fn); };
   const now = () => Math.min(au.currentTime || 0, Math.max(0, p.total - 0.5));
   on("#cuScan", "click", () => cueScan(false));
+  on("#cuScanAll", "click", cueScanAll);
+  on("#cuCat", "click", () => soundCatalog());
   on("#cuAddS", "click", () => cueAdd("sfx", now()));
   on("#cuAddA", "click", () => cueAdd("amb", now()));
   on("#cuAddM", "click", () => cueAdd("mus", now()));
@@ -2143,16 +2373,20 @@ $("#sndBtn").addEventListener("click", () => { S.showCues = !S.showCues; applyCu
 
 // ---------------------------------------------------------------- движок и заявки
 function drawEngine(){
-  const b = $("#engine"), e = S.engine || {}, n = (e.workers || []).length;
-  b.className = e.ready ? "ok" : (e.starting ? "wait" : (e.note ? "bad" : ""));
-  b.querySelector("span").textContent = e.ready ? "Движок готов" + (n > 1 ? ": " + n : "") : (e.starting ? "Движок запускается…" : "Запустить движок");
-  b.title = e.ready ? "Переозвучка на лету работает. Воркеров: " + n + (e.queued ? ", заявок в работе: " + e.queued : "") : (e.note || "Движок озвучки не запущен. Он нужен, чтобы переозвучивать фразы.");
+  const b = $("#engine"), e = S.engine || {}, ws = e.workers || [];
+  const book = Number.isInteger(e.book_workers) ? e.book_workers : ws.filter(w => w.mode !== "serve").length;
+  const editor = Number.isInteger(e.editor_workers) ? e.editor_workers : ws.filter(w => w.mode === "serve").length;
+  const models = Number.isInteger(e.model_workers) ? e.model_workers : ws.length, starting = e.starting || e.pipeline_starting;
+  b.className = e.ready ? "ok" : (starting ? "wait" : (e.note ? "bad" : ""));
+  b.querySelector("span").textContent = e.ready ? (book ? "Книга: " + book + (editor ? " · редактор: " + editor : "") : "Редактор готов" + (editor > 1 ? ": " + editor : "")) : (e.pipeline_starting ? "Конвейер запускает движок…" : (starting ? "Движок запускается…" : "Запустить движок"));
+  b.title = e.ready ? "Воркеры книги: " + book + "; отдельные воркеры редактора: " + editor + "; всего моделей: " + models + ". Воркеры книги также берут заявки редактора между фразами." + (e.queued ? " Заявок в работе: " + e.queued + "." : "") : (e.pipeline_starting ? "Конвейер загружает модели. Его воркеры примут заявки редактора после прогрева." : (e.note || "Движок озвучки не запущен. Он нужен, чтобы переозвучивать фразы."));
+  if(Number.isInteger(e.max_new_tokens) && e.max_new_tokens > 0) b.title += " Лимит токенов при следующем запуске: " + e.max_new_tokens + ". Это предел генерации одной фразы, не размер батча.";
 }
 async function startEngine(force){
-  try { const r = await api("/api/engine", {force:!!force}); S.engine = r.engine; drawEngine(); if(!r.engine.ready){ toast("Движок запускается: модель грузится около минуты. Заявки подождут. Ход загрузки — в журнале внизу.", "blue"); if(!J.open){ jOpen(true); J.auto = true; } } }
+  try { const r = await api("/api/engine", {force:!!force}); S.engine = r.engine; drawEngine(); if(!r.engine.ready){ toast(r.engine.pipeline_starting ? "Конвейер уже запускает движок. Заявки редактора подождут его воркеров; отдельная модель сейчас не запускается." : "Движок запускается: модель грузится около минуты. Заявки подождут. Ход загрузки — в журнале внизу.", "blue"); if(!J.open){ jOpen(true); J.auto = true; } } }
   catch(e){ toast(e.message, "red", 14000, ["Запустить всё равно", () => startEngine(true)]); }
 }
-$("#engine").addEventListener("click", () => { if(!S.engine.ready && !S.engine.starting) startEngine(); });
+$("#engine").addEventListener("click", () => { if(!S.engine.ready && !S.engine.starting && !S.engine.pipeline_starting) startEngine(); });
 async function pollJobs(){
   try {
     const r = await api("/api/jobs"), before = S.jobs;
@@ -2304,8 +2538,14 @@ for(const b of document.querySelectorAll("[data-jf]")) b.addEventListener("click
 $("#jCheck").onclick = async () => { try { await api("/api/selfcheck", {}); jFilter("chk"); pollLog(); } catch(e){ fail(e); } };
 $("#jClean").onclick = () => dialog('<h3>Очистить кэш студии?</h3><p>Кэш — это уже обработанные фразы и части, собранные для прослушивания. Сейчас он занимает ' + gbs(J.sys && J.sys.cache ? J.sys.cache.mb : null) + '. Студия пересчитает всё сама, когда понадобится: после очистки первое открытие каждой части займёт на несколько секунд больше.</p><p>Правки, дубли, закреплённые записи и готовые файлы не затрагиваются.</p>',
   [["Отмена"], ["Очистить", async () => { try { const r = await api("/api/clean", {}); toast(r.skipped ? "Сейчас идёт сборка — очистите кэш чуть позже." : "Кэш очищен: освободилось " + gbs(r.freed) + ".", r.skipped ? "" : "ok"); pollLog(); } catch(e){ fail(e); } }, "pri"]]);
-const cleanDup = (backup) => dialog('<h3>Убрать дубли и артефакты' + (backup ? ' (с копией)' : ' без копии') + '?</h3><p>Для каждой фразы остаётся выбранный дубль и закреплённая запись; невыбранные дубли, записи фраз, которых больше нет в книге, и корзина убираются. Кэш студии очищается заодно. Готовые файлы и правки текста не затрагиваются.</p><p>' + (backup ? 'Убранное не стирается: оно переносится в studio\\trash, а правки копируются в studio\\backup.' : 'Убранное стирается насовсем.') + '</p>',
-  [["Отмена"], ["Убрать", async () => { try { const r = await api("/api/clean_takes", {backup}); toast(r.skipped ? "Сейчас идёт сборка — повторите чуть позже." : "Убрано файлов: " + r.removed + ", освободилось " + gbs(r.freed) + ".", r.skipped ? "" : "ok"); pollLog(); } catch(e){ fail(e); } }, "pri"]]);
+const cleanDup = (backup) => dialog('<h3>Убрать неиспользуемые дубли ' + (backup ? 'с дополнительной копией проекта' : 'без дополнительной копии проекта') + '?</h3>'
+  + '<p>Выбранные и закреплённые записи, а также файлы, на которые ссылаются отмена или сохранённые проекты, останутся. Остальные дубли переместятся в корзину студии; исходный текст и готовые части сохранятся.</p>'
+  + '<p>' + (backup ? 'Перед очисткой будет создана дополнительная копия проекта. ' : 'Дополнительная копия проекта создаваться не будет. ') + 'В обоих режимах сохраняются журнал операции и возможность отмены: Ctrl+Z вернёт перемещённые файлы. Корзина этой командой не удаляется; её перенос сам по себе не освобождает место на диске.</p>',
+  [["Отмена"], ["Переместить в корзину", async () => {
+    try { const r = await api("/api/clean_takes", {backup});
+      toast(r.skipped ? "Сейчас идёт сборка — повторите чуть позже." : "Перемещено файлов: " + (r.removed || 0) + ". Ctrl+Z возвращает их из корзины.", r.skipped ? "" : "ok"); pollLog();
+    } catch(e){ fail(e); }
+  }, "pri"]]);
 $("#jDup").onclick = () => cleanDup(true);
 $("#jDup0").onclick = () => cleanDup(false);
 $("#jOpenG").onclick = () => openDir("gotovo");
@@ -2347,6 +2587,9 @@ function helpDialog(){
     ["Проект: сохранить и вернуться", "Каждая правка пишется на диск сразу, поэтому «сохраняться» не обязательно. Ctrl+S делает точку возврата — снимок всей работы: правок, вставок, обрезок, закреплений, звуков на дорожках. Он мгновенный и маленький, потому что записи со своего диска студия не удаляет никогда. «Сохранить со звуком» в окне «Проект» кладёт в один файл ещё и все дубли, свои записи и звуки — это резервная копия и способ перенести работу на другой компьютер. Окно «Проект» (Ctrl+O) показывает сохранённое; «Загрузить» сначала объясняет, что изменится. Перед загрузкой нынешнее состояние само сохраняется точкой возврата, записи только добавляются — загрузку всегда можно отыграть назад. Точки возврата студия делает и сама: при закреплении части."],
     ["Вся книга как есть: без остановок, с паузой", "Кнопка «Вся книга» вверху окна. Студия сама ведёт книгу часть за частью: конвейер озвучивает и собирает часть, студия принимает её как есть, закрепляет, собирает готовый файл — и сразу следующую. Главы собираются по дороге, как только закреплена их последняя часть; звуки и музыка партитуры ставятся сами (громкости по умолчанию: музыка 10 %, звуки 16 %, фон 12 %). «Пауза» (справа над лентой) останавливает конвейер, всё озвученное сохраняется; «Продолжить книгу» идёт с того же места, хоть на другой день. Окно студии должно быть открыто. Принятые так части помечены «принята без прослушивания» — любую можно открыть, снять закрепление, поправить и закрепить снова. «Собрать готовые главы» в «Частях и главах» собирает файлы всех глав, которые уже озвучены целиком."],
     ["Короткая фраза молчит, проба голоса пустая", "На очень коротких фразах («Наконец-то.») движок иногда возвращает тишину. Студия теперь сама пробует ещё несколько раз другим способом, а если речи так и нет — дубль не записывается, и в части остаётся прежняя запись; нажмите «Озвучить заново» ещё раз. Если прежняя версия уже успела выбрать пустой дубль, выбор возвращается к звучащему сам (строка об этом — в журнале). «Проба» в окне «Голоса» читает реплику роли подлиннее, пустой результат не запоминается. «Сбросить голос роли» возвращает роли её первоначальный голос; «Вернуть прежний голос» — тот, что был до последней смены."],
+    ["Вырезать паузу или несколько кусков", "Откройте ножницы у дубля (T), нажмите «Вырезать кусок» и проведите по волне. Оба края останутся; можно сделать несколько вырезов. «Вернуть вырезанное» убирает внутренние вырезы, а «Целиком» также возвращает края. Пустую запись сохранить нельзя. «Применить и перейти» отдаёт следующей фразе остаток после последнего сохранённого отрезка."],
+    ["Прежние озвучки после переразбивки", "В окне фразы есть «Прежние озвучки…»: рядом показаны нынешний и исходный текст, роль и степень сходства. Прослушайте обе записи, затем добавьте старую дублем или выберите её. Неоднозначные совпадения требуют ручного подтверждения. Автоподбор в «Частях и главах» принимает только точное и единственное совпадение текста и известной роли. Поиск использует сохранившиеся дубли Studio и каталог проверенных прежних редакций конвейера. Записи без подтверждённого исходного текста или роли предлагаются только для ручного сравнения."],
+    ["Каталог звуков и свои папки", "Нажмите «Каталог звуков…» в звуковой сводке части: выберите раздел, подраздел или введите русское слово, прослушайте и выберите файл. Затем укажите дорожку: звук, фон или музыка. Вставка появится у курсора. «Папки со звуками…» подключает внешние файлы; «Обновить каталог» перечитывает их после добавления. Если индекс достиг ограничения, подключите более узкую папку."],
     ["Что-то пошло не так", "Откройте журнал и нажмите «Важное» — останутся замечания и сбои. «Скопировать» кладёт показанные строки в буфер обмена. Правки пишутся на диск сразу: если окно закрылось, запустите студию ярлыком ещё раз — всё на месте."]];
   dialog('<h3>Справка: как сделать</h3>' + H.map((x, i) => '<details' + (i ? "" : " open") + '><summary>' + x[0] + '</summary><p>' + x[1] + '</p></details>').join("")
     + '<p class="note">Версия студии ' + esc(S.ver || "") + '.</p>', [["Клавиши", keysDialog], ["Закрыть"]]);
@@ -2355,7 +2598,7 @@ function dialog(html, buttons){
   const d = $("#dlg");
   d.innerHTML = html + '<div class="foot"></div>';
   const f = d.querySelector(".foot");
-  for(const [name, fn, cls] of buttons){ const b = document.createElement("button"); b.textContent = name; if(cls) b.className = cls; b.onclick = () => { closeDialog(); if(fn) fn(); }; f.appendChild(b); }
+  for(const [name, fn, cls, keepOpen] of buttons){ const b = document.createElement("button"); b.textContent = name; if(cls) b.className = cls; b.onclick = () => { if(!keepOpen) closeDialog(); if(fn) fn(); }; f.appendChild(b); }
   $("#veil").hidden = false;
   const last = f.lastElementChild; if(last) last.focus();
 }
@@ -2383,8 +2626,10 @@ function partsDialog(){
        + (c.ready ? '<button data-ch="' + c.ch + '">Собрать главу</button> <button data-chl="' + c.ch + '" class="lockb">Закрепить и собрать</button>' : "ещё озвучивается") + '</td></tr>';
   }
   h += '</table><p class="note" style="margin-top:10px">Версии со звуком лежат в соседних папках: gotovo\\chasti_effekty, chasti_effekty_okruzhenie, chasti_effekty_muzyka, chasti_so_zvukom — и такие же glavy_… Какие версии собирать — галочки в сводке части («Звуки и музыка») и в окне «Вся книга».</p><p class="goline"><button id="chAll" title="Собрать файлы всех глав, которые уже озвучены целиком, а файла у них нет или он устарел">Собрать готовые главы</button><span class="note" style="margin:0">Глава собирается из её частей; звуки и музыка — вторым файлом рядом («со звуком»).</span></p><p class="note">Готовые части: ' + esc(S.gotovo.parts) + '<br>Готовые главы: ' + esc(S.gotovo.chapters) + (S.gotovo.disk ? '<br>Копии на Яндекс Диске: ' + esc(S.gotovo.disk) : "") + '</p>';
+  if(S.n) h += '<p class="note"><button id="oldAuto">Подобрать точные прежние озвучки</button> Только однозначные совпадения текста и роли для фраз без записи. Остальные можно сравнить вручную.</p>';
   if(S.orphans) h += '<p class="note">Правок, потерявших свою фразу после переразбивки книги: ' + S.orphans + '. Они сохранены в studio\\edits.json (раздел orphans).</p>';
   dialog(h, [["Закрыть"]]);
+  const oldAuto = $("#oldAuto"); if(oldAuto) oldAuto.onclick = oldVoiceAuto;
   dlgSearch("table tr:not(:first-child)", "найти часть или главу: номер, слово из названия, «закреплена»…");
   const gd = $("#goDlg"); if(gd) gd.onclick = () => { closeDialog(); goNext(); };
   const ca = $("#chAll"); if(ca) ca.onclick = () => { closeDialog(); bookChapters(); };

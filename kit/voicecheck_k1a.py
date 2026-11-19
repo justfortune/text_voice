@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 """
 voicecheck_k1a.py — проверка образцов голосов по высоте тона: мужской / женский / детский.
 Для каждой роли из roles.json, у которой есть образец work/voices/*.wav, считается медианная частота основного
@@ -15,6 +15,8 @@ voicecheck_k1a.py — проверка образцов голосов по вы
 from __future__ import annotations
 
 import sys
+if "--dry" in sys.argv:
+    sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -78,7 +80,7 @@ def verdict(exp: str, f0: float) -> str:
     return "ok" if f0 >= ok_lim else ("doubt" if f0 >= bad_lim else "bad")
 
 
-def main():
+def _main(guard):
     dry = "--dry" in sys.argv
     force = set(sys.argv[sys.argv.index("--force") + 1:]) if "--force" in sys.argv else set()
     roles = n.load_roles()
@@ -115,7 +117,10 @@ def main():
             continue
         v = "bad" if role in force else verdict(exp, f0)
         report[role] = {"f0": round(f0, 1), "expected": exp, "ok": v != "bad", "verdict": v}
-        if v == "bad" and role in voiced and role not in force:
+        if v == "bad" and role in guard.protected:
+            mark = "<<< НЕ СОВПАЛ — голос закреплённой редакции сохранён (автоматическая замена запрещена)"
+            keep_bad.append(role)
+        elif v == "bad" and role in voiced and role not in force:
             mark = "<<< НЕ СОВПАЛ — проверьте на слух (им уже озвучены реплики, сам не трогаю)"
             keep_bad.append(role)
         elif v == "bad" and tries.get(role, 0) >= MAX_TRIES and role not in force:
@@ -133,41 +138,32 @@ def main():
         lines.append(f"{role:<22} {wav_p.name:<24} F0={f0:5.0f} Гц  ожидание {exp:<6} {mark}")
     removed_wavs = 0
     if bad and not dry:
-        import shutil
-        import time as _time
-        bad_set = set(bad)
-        old = n.WORK / "voices_old"                   # прежние образцы не удаляются — сюда, с датой
-        old.mkdir(exist_ok=True)
-        stamp = _time.strftime("%Y%m%d-%H%M%S")
-        for role in bad:
-            wav_p, txt_p = n.voice_files(role, stems)
-            for p in (wav_p, txt_p):
-                if p.exists():
-                    shutil.move(str(p), str(old / f"{p.stem}__{stamp}{p.suffix}"))
-        for r in rows:
-            if n.resolve_role(r["speaker"], roles) in bad_set:
-                p = n.wav_for(r, roles)
-                if p.exists():
-                    p.unlink()
-                    removed_wavs += 1
-                    t = p.with_suffix(".txt")
-                    if t.exists():
-                        t.unlink()
+        removed_wavs = guard.invalidate_wavs(bad, roles)
+        guard.retire_samples(bad)
     if not dry:
         tries_p.write_text(_json.dumps(tries, ensure_ascii=False, indent=1), encoding="utf-8")
-    (n.WORK / "voicecheck.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if not dry:
+        (n.WORK / "voicecheck.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     import json
-    (n.WORK / "voicecheck.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    if not dry:
+        (n.WORK / "voicecheck.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     print("\n".join(lines))
     print(f"\nпроверено образцов: {len(lines)}; пересоздаю: {len(bad)}"
-          + (f" (прежние образцы — в work\\voices_old; сброшено реплик: {removed_wavs})" if bad and not dry else "")
+          + (f" (прежние образцы — в work\\voice_history; сброшено реплик: {removed_wavs})" if bad and not dry else "")
           + f"; под вопросом: {len(doubt)}; не совпали, но уже звучат в книге (решать вам): {len(keep_bad)}")
     if bad:
         print("  пересоздать: " + ", ".join(bad))
     if keep_bad:
         print("  ПРОВЕРЬТЕ НА СЛУХ (лист «Роли», ссылка на образец): " + ", ".join(keep_bad)
-              + "\n  если голос не тот — напишите мне, или: voicecheck_k1a.py --force РОЛЬ")
-    (n.WORK / "recast.txt").write_text("\n".join(bad) + "\n", encoding="utf-8")
+              + "\n  закреплённые голоса меняются только явной правкой редакции в Studio; автоматическая пересоздача их не затрагивает")
+    if not dry:
+        (n.WORK / "recast.txt").write_text("\n".join(bad) + "\n", encoding="utf-8")
+
+
+def main():
+    from nox_voice_safety import RoleSafety
+    with RoleSafety(n, readonly="--dry" in sys.argv) as guard:
+        return _main(guard)
 
 
 if __name__ == "__main__":

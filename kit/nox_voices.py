@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 """
 nox_voices.py — БАНК ГОЛОСОВ и подбор голосов ролям. Свои голоса записывать не нужно.
 
@@ -976,77 +976,19 @@ def cmd_history(a):
 
 
 def cmd_tidy(a):
-    """Порядок в голосах книги и банка. Ничего не удаляется: лишнее переносится в подпапки. Без --apply — только отчёт."""
-    n = load_n(a.root)
-    roles = n.load_roles()
-    stems = n.voice_stems(roles)
-    keep = set()
-    for role in roles["roles"]:
-        w, tx = n.voice_files(role, stems)
-        keep.add(w.name.lower())
-        keep.add(tx.name.lower())
-    vdir = n.VOICES
-    orphans = sorted(p for p in vdir.iterdir() if p.is_file() and p.suffix.lower() in (".wav", ".txt")
-                     and p.name.lower() not in keep and not p.name.endswith(".new")) if vdir.is_dir() else []
-    b = bank_load()
-    cat = {c[0] for c in CATALOG}
-    dead = [(vid, rec) for vid, rec in b["voices"].items()
-            if rec.get("kind") in ("book", "custom") and not (BANK / f"{vid}.wav").exists()]
-    known = cat | set(b["voices"])
-    stray = sorted(p for p in BANK.glob("*.wav") if p.stem not in known) if BANK.is_dir() else []
-    dead_ids = {vid for vid, _ in dead}
-    unbound = [role for role, cfg in roles["roles"].items() if (cfg.get("voice") or {}).get("bank") in dead_ids]
-    old = n.WORK / "voices_old"
-    prev_gone = [role for role, cfg in roles["roles"].items()
-                 if (cfg.get("voice_prev") or {}).get("file") and not (old / (str(cfg["voice_prev"]["file"]) + ".wav")).exists()]
-    rep_ = dict(applied=bool(a.apply),
-                book=dict(orphans=[p.name for p in orphans], kb=round(sum(p.stat().st_size for p in orphans) / 1024),
-                          to=str(old / "bez_roli")),
-                bank=dict(dead=[dict(id=vid, name=rec.get("name") or vid) for vid, rec in dead],
-                          stray=[p.name for p in stray], to=str(BANK / "bez_zapisi")),
-                roles=dict(unbound=unbound, prev_gone=prev_gone))
-    if a.apply:
-        if orphans:
-            dst = old / "bez_roli"
-            dst.mkdir(parents=True, exist_ok=True)
-            stamp = time.strftime("%Y%m%d-%H%M%S")
-            for p in orphans:
-                q = dst / p.name
-                if q.exists():
-                    q = dst / f"{p.stem}__{stamp}{p.suffix}"
-                shutil.move(str(p), str(q))
-        if stray:
-            dst = BANK / "bez_zapisi"
-            dst.mkdir(parents=True, exist_ok=True)
-            for p in stray:
-                for f in (p, p.with_suffix(".txt")):
-                    if f.exists():
-                        q = dst / f.name
-                        if q.exists():
-                            q = dst / f"{f.stem}__{time.strftime('%Y%m%d-%H%M%S')}{f.suffix}"
-                        shutil.move(str(f), str(q))
-        if dead:
-            for vid, _ in dead:
-                b["voices"].pop(vid, None)
-            bank_save(b)
-        if unbound or prev_gone:
-            for role in unbound:
-                v = roles["roles"][role].get("voice") or {}
-                v.pop("bank", None)                      # образец роли на месте; запись банка пропала — это теперь «свой образец»
-                roles["roles"][role]["voice"] = v
-                if not v.get("name"):
-                    roles["roles"][role].pop("voice", None)
-            for role in prev_gone:
-                roles["roles"][role].pop("voice_prev", None)
-            save_roles(n, roles)
+    """Порядок в голосах с проверяемой парной корзиной; без --apply только отчёт."""
+    from nox_voice_tidy import tidy_voices
+    rep_ = tidy_voices(load_n(a.root), BANK, CATALOG, apply=a.apply)
     if a.json:
         print(json.dumps(rep_, ensure_ascii=False))
         return 0
     word = "убрано" if a.apply else "можно убрать"
     print(f"  порядок в голосах ({'сделано' if a.apply else 'только отчёт; с ключом --apply — выполнить'}):")
     print(f"    образцов без роли в книге: {len([x for x in rep_['book']['orphans'] if x.lower().endswith('.wav')])} ({word} в {rep_['book']['to']})")
-    print(f"    записей банка без файла образца: {len(dead)}; файлов банка без записи: {len(stray)}")
-    print(f"    ролей со ссылкой на пропавший голос банка: {len(unbound)}; с пропавшим «прежним образцом»: {len(prev_gone)}")
+    print(f"    записей банка без файла образца: {len(rep_['bank']['dead'])}; файлов банка без записи: {len(rep_['bank']['stray'])}")
+    print(f"    ролей со ссылкой на пропавший голос банка: {len(rep_['roles']['unbound'])}; с пропавшим «прежним образцом»: {len(rep_['roles']['prev_gone'])}")
+    if rep_.get("journal"):
+        print("    проверенный журнал и прежние метаданные: " + rep_["journal"])
     return 0
 
 

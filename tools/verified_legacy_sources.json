@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "normalization": "SHA-256 after removing a UTF-8 BOM and replacing CRLF with LF",
+  "sources": [
+    {
+      "scope": "app",
+      "path": "nox_studio.py",
+      "sha256": "2f75d70b6b7493bcdfb3fd454429d52f5b364d46fa2708d7f5b5b5b4c9040f70",
+      "reason": "Audited installed main variant. Only Studio._engine_spawn differs: explicitly launches the book envfast interpreter. Recovery2 preserves that behavior through tool_py('fast')."
+    },
+    {
+      "scope": "home",
+      "path": "nox_audiobook.py",
+      "sha256": "2f8508ad7a822eea553e401132f76636479eba9070d121fd70f67abee960c7f0",
+      "reason": "Audited earlier base. Applying the actual installed preparation patch reproduces the installed Stage21 runtime exactly after newline normalization. No unique local function is lost."
+    },
+    {
+      "scope": "home",
+      "path": "nox_fast.py",
+      "sha256": "ea467de689b7a3f5dfe0a0a85e012fe48f860bba42f0eae8a422cc2cb21bcaf1",
+      "reason": "Exact archived early generic worker, distinct from the active book worker. Recovery2 uses the verified complete current worker and retains the original bytes in the code rollback."
+    },
+    {
+      "scope": "app",
+      "path": "nox_studio_18d.py",
+      "sha256": "1fc857f901736685b0f99c1c53870e2bada9f8d6fc3663c42c40881840af7e02",
+      "reason": "Exact delivered recovery2 extension. Public1 changes only its BUILD identity; optional update preserves the immutable recovery2 bundle and does not require reinstalling an already working recovery2."
+    }
+  ]
+}

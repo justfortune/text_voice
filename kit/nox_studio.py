@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_STUDIO 2026-11-12a
+# NOX_STUDIO 2026-11-18d — integrated recovery build, see nox_release.json
 """
 nox_studio.py — «Нокс Студия»: ручная правка аудиокниги поверх черновой озвучки.
 
@@ -45,7 +45,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "2026-11-12a"
+VERSION = "2026-11-18d"
+from nox_studio_18d import trim_spans, trim_total, cut_audio, make_studio_class
 ACUTE = "\u0301"
 GLUE_GAP = 0.12                   # пауза на стыке склеенных записей, с (как между кусками одного предложения)
 WORD_RE = re.compile(r"[А-Яа-яЁё\u0301]+")
@@ -234,33 +235,8 @@ def plus_to_acute(t: str) -> str:
 
 
 def write_atomic(path: Path, data):
-    """Запись через временный файл: при сбое на диске остаётся прежняя версия. Антивирус может держать файл — 5 попыток."""
-    tmp = path.with_name(path.name + ".tmp")
-    b = data.encode("utf-8") if isinstance(data, str) else data
-    created_tmp = False
-    for k in range(5):
-        try:
-            with open(tmp, "wb") as f:
-                created_tmp = True
-                f.write(b)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass
-            os.replace(tmp, path)
-            return
-        except OSError:
-            if k == 4:
-                # Не оставляем собственный незавершённый файл после окончательного сбоя.
-                # Старый целевой файл не трогаем; ошибку очистки не подменяем исходной.
-                if created_tmp:
-                    try:
-                        tmp.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                raise
-            time.sleep(0.2 * (k + 1))
+    from nox_release_io import atomic_write
+    atomic_write(path, data)
 
 
 def read_json(path: Path, dflt):
@@ -1054,8 +1030,7 @@ class Studio:
             x, sr = self.read_audio(sc["path"])
             tr = sc.get("trim")
             if tr:
-                i0 = max(0, int(float(tr[0]) * sr))
-                x = x[i0:max(i0 + int(0.05 * sr), int(float(tr[1]) * sr))]
+                x = cut_audio(x, sr, tr)
             x = np.asarray(x, dtype="float32")
             if n.NORM_ON and len(x) > sr // 10:
                 x = np.asarray(n._level(x, sr, n.NORM_DB), dtype="float32")
@@ -1704,15 +1679,16 @@ class Studio:
         """С версии 11c кэш обработки ведётся по содержимому записи, и «версия» части считается иначе. Готовый файл,
         собранный прежней студией, из-за этого выглядел бы устаревшим, хотя звук тот же. Поэтому при первом открытии
         такой части сверяем по прежнему счёту: был свеж тогда — свеж и теперь. Делается один раз на часть."""
-        try:
-            if self.timeline(a, b, False, keyfn=self.proc_key_v1)[0]["ver"] == ex.get("ver"):
-                ex["ver"] = ver
-                log(f"готовая часть {k} собрана прежней версией студии: звук тот же, пересобирать не нужно", "ok")
-        except Exception:
-            log("отметка готового файла не переведена (сам файл на месте; студия предложит собрать его заново):\n"
-                + traceback.format_exc(), "warn")
-        ex["kv"] = 2
-        write_atomic(self.dir / "edits.json", json.dumps(self.store, ensure_ascii=False, indent=1))
+        with self.lock:
+            try:
+                if self.timeline(a, b, False, keyfn=self.proc_key_v1)[0]["ver"] == ex.get("ver"):
+                    ex["ver"] = ver
+                    log(f"готовая часть {k} собрана прежней версией студии: звук тот же, пересобирать не нужно", "ok")
+            except Exception:
+                log("отметка готового файла не переведена (сам файл на месте; студия предложит собрать его заново):\n"
+                    + traceback.format_exc(), "warn")
+            ex["kv"] = 2
+            self.save("совместимость готового файла", {"part": k})
 
     def proc(self, i: int, eq: dict, ef: dict, sc: dict, key: str, row_snapshot=None, roles_snapshot=None):
         """Запись фразы -> звук для части. Шаги и порядок — как в assemble() конвейера (сверено на этапе STAGE_OK)."""
@@ -1736,8 +1712,7 @@ class Studio:
         x, sr = self.read_audio(sc["path"])
         tr = sc.get("trim")
         if tr:                                             # обрезка дубля: исходная запись цела, берётся её отрезок
-            i0 = max(0, int(float(tr[0]) * sr))
-            x = x[i0:max(i0 + int(0.05 * sr), int(float(tr[1]) * sr))]
+            x = cut_audio(x, sr, tr)
         if sc.get("imp"):
             # Своя запись автора — живая речь: её не «чинят» как синтез (паузы, щелчки, общее ускорение книги не
             # применяются). Только темп самой фразы (если автор его менял), громкость — к уровню книги, края — плавно.
@@ -2595,8 +2570,9 @@ class Studio:
         тишину, — фраза в части умолкала. Выбор возвращается к последнему звучащему дублю того же текста и той же роли;
         нет такого — к черновой записи (текст и роль правки остаются, фраза станет «переозвучить»). Закреплённые фразы
         не трогаются — о них сообщается. Сами пустые дубли остаются в списке: их видно и можно удалить."""
-        fixed, locked = [], []
+        fixed, locked, selected_in_parts = [], [], []
         with self.lock:
+            selected_protection = self._part_selected_guard_uids()
             for uid, e in list(self.store["segs"].items()):
                 i = self.idx_of.get(uid)
                 if i is None or not (e.get("take") or (e.get("locked") or {}).get("take")):
@@ -2606,7 +2582,9 @@ class Studio:
                     locked.append(self.rows[i]["id"])
                     continue
                 cur = tk.get(e.get("take") or "")
-                if e.get("locked") or not self.take_dead(cur):
+                if e.get("locked") or uid in selected_protection or not self.take_dead(cur):
+                    if uid in selected_protection and self.take_dead(cur):
+                        selected_in_parts.append(self.rows[i]["id"])
                     continue
                 good = [x for x in tk.values()
                         if not self.take_dead(x) and self.fits(e, x) and x.get("role") == cur.get("role")
@@ -2631,7 +2609,12 @@ class Studio:
             log("в ЗАКРЕПЛЁННЫХ фразах № " + ", ".join(map(str, locked[:12])) + ("…" if len(locked) > 12 else "")
                 + " выбран дубль без речи — они молчат в готовом файле. Снимите закрепление, выберите звучащий дубль "
                   "(или переозвучьте) и закрепите снова", "warn", "проверка")
-        return dict(fixed=len(fixed), locked=len(locked))
+        if selected_in_parts:
+            log("в закреплённых частях у фраз № " + ", ".join(map(str, selected_in_parts[:12]))
+                + ("…" if len(selected_in_parts) > 12 else "")
+                + " выбран дубль без речи. Выбор сохранён: проверьте запись и выберите подходящий дубль вручную; "
+                  "отдельный снимок закрепления этим фразам не добавлялся", "warn", "проверка")
+        return dict(fixed=len(fixed), locked=len(locked) + len(selected_in_parts), part_selected=len(selected_in_parts))
 
     def choose_take(self, uid: str, tid):
         with self.lock:
@@ -3197,16 +3180,23 @@ class Studio:
         return str(d)
 
     def _to_disk(self, src: Path, sub: str):
+        from nox_release_io import atomic_copy
         d = self.disk_dir()
         if not d:
             return None
+        target = Path(d) / sub / src.name
         try:
-            n.copy_to(Path(d) / sub, src)
-            write_atomic(Path(d) / "edits_backup.json", (self.dir / "edits.json").read_bytes())   # правки — тоже в облако
-            return str(Path(d) / sub / src.name)
+            atomic_copy(src, target)
         except Exception as e:
-            log(f"на Диск не скопировано ({src.name}): {e}")
+            log(f"файл собран локально; копия на Диск не обновлена ({src.name}): {e}", "warn")
             return None
+        try:
+            write_atomic(Path(d) / "edits_backup.json", (self.dir / "edits.json").read_bytes())
+            self._disk_metadata_error = None
+        except Exception as e:
+            self._disk_metadata_error = str(e)
+            log(f"аудио скопировано на Диск ({src.name}), но копия правок edits_backup.json не обновлена: {e}", "warn")
+        return str(target)
 
     def _encode(self, audio, sr, chapters, out: Path, title: str, bitrate=None) -> float:
         try:
@@ -3267,7 +3257,45 @@ class Studio:
         if anchors and any(self.idx_of.get(uid) != index for uid, index in anchors):
             raise Oops("границы части или главы изменились во время экспорта; старый готовый файл сохранён.")
 
+
+    def _publish_export(self, staged_dir, publication, new_store):
+        """Voice, mixes, sidecars and edits are one recoverable publication."""
+        from nox_release_io import Publication, digest
+        from nox_file_transactions import directory_lock
+        with directory_lock(self.dir / "transactions"):
+            guard = getattr(self, "mutation_guard", None)
+            if guard is not None:
+                guard()
+            for attr, path in (("_edits_sha", self.dir / "edits.json"), ("_fixed_sha", self.dir / "fixed_parts.json")):
+                if hasattr(self, attr):
+                    actual = digest(path) if path.exists() else None
+                    if actual != getattr(self, attr):
+                        raise Oops("состояние проекта изменено другим процессом; экспорт не опубликован")
+            staged_edits = Path(staged_dir) / "export_edits.json"
+            write_atomic(staged_edits, jd(new_store))
+            tx = Publication(self.dir / "export_transactions", list(publication) + [(staged_edits, self.dir / "edits.json")],
+                             allowed_root=self.root)
+            try:
+                tx.publish()
+                tx.commit()
+            except BaseException:
+                if tx.doc["state"] == "published":
+                    tx.rollback()
+                raise
+            self.store = new_store
+            accept = getattr(self, "_accept_published_state", None)
+            if accept is not None:
+                accept()
+
+    def _copy_export_files(self, ex, where):
+        ex["disk"] = self._to_disk(Path(ex["file"]), where)
+        for vid, value in (ex.get("vars") or {}).items():
+            suf = next(v[2] for v in MIX_VARS if v[0] == vid)
+            value["disk"] = self._to_disk(Path(value["file"]), f"{where}_{suf}")
+        ex["disk_metadata_error"] = getattr(self, "_disk_metadata_error", None)
+
     def export_part(self, k: int) -> dict:
+        import copy
         with self.lock:
             p = self.open_part(k)
             a, b = p["a"], p["b"]
@@ -3287,36 +3315,29 @@ class Studio:
                 staged_tech = stage_dir / f"part_{k:02d}.tech.txt"
                 mf = self.render_dir / f"part_{k:02d}.json"
                 staged_meta = stage_dir / mf.name
-
                 with self.lock:
                     self._assert_part_range_current(k, a, b)
                     self._assert_export_current(a, b, meta, anchors)
-                    if (k < 1 or k > len(self.store["parts"])
-                            or self.store["parts"][k - 1].get("last") != anchors[1][0]):
-                        raise Oops(f"граница части {k} изменилась во время экспорта; старый готовый файл сохранён.")
+                    if (k < 1 or k > len(self.store["parts"]) or self.store["parts"][k-1].get("last") != anchors[1][0]):
+                        raise Oops(f"граница части {k} изменилась во время экспорта; старый готовый файл сохранён")
                     write_atomic(staged_times, self._times_tsv(meta))
                     write_atomic(staged_tech, self._tech_txt(meta, f"часть {k:02d}"))
-                    op.stage("сведение со звуками и музыкой")
-                    vs = self._export_mixes(a, b, meta, staged_voice, "chasti", name,
-                                            audio=audio, sr=meta["sr"], op=op)
+                    write_atomic(staged_meta, jd(meta))
+                    publication = [(staged_voice, out), (staged_times, out.with_name(f"part_{k:02d}.times.tsv")),
+                                   (staged_tech, out.with_name(f"part_{k:02d}.tech.txt")), (staged_meta, mf)]
+                    vs = self._export_mixes(a, b, meta, staged_voice, "chasti", name, audio=audio, sr=meta["sr"], op=op,
+                                           staging=stage_dir, publication=publication)
                     mix = vs.get("all")
-                    if (read_json(mf, None) or {}).get("ver") != meta["ver"]:
-                        write_atomic(staged_meta, jd(meta))
-
-                    # Publish only after the current edition has been revalidated under the state lock.
-                    os.replace(staged_voice, out)
-                    os.replace(staged_times, out.with_name(f"part_{k:02d}.times.tsv"))
-                    os.replace(staged_tech, out.with_name(f"part_{k:02d}.tech.txt"))
-                    if staged_meta.exists():
-                        os.replace(staged_meta, mf)
-                    op.stage("копия на Яндекс Диск")
-                    disk = self._to_disk(out, "chasti")
-                    op.note = self._export_note(out, total, mix, disk, vs)
-
-                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, mix=mix, vars=vs,
+                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=None, mix=mix, vars=vs,
                               csig=self.cues_sig(a, b), kv=2)
-                    self.store["parts"][k - 1]["export"] = ex
-                    self.save(f"собрана готовая часть {k}", {"file": str(out), "dur": ex["dur"]})
+                    store = copy.deepcopy(self.store)
+                    store["parts"][k-1]["export"] = ex
+                    self._publish_export(stage_dir, publication, store)
+                    op.stage("копия на Яндекс Диск")
+                    self._copy_export_files(ex, "chasti")
+                    self._publish_export(stage_dir, [], copy.deepcopy(self.store))
+                    op.note = self._export_note(out, total, mix, ex["disk"], vs)
+                    self.journal({"why": f"собрана готовая часть {k}", "file": str(out), "dur": ex["dur"]})
             return ex
         finally:
             shutil.rmtree(stage_dir, ignore_errors=True)
@@ -3329,9 +3350,16 @@ class Studio:
             size = f", {out.stat().st_size / 1048576:.1f} МБ"
         except OSError:
             size = ""
+        if disk:
+            disk_note = "; аудио скопировано в папку Яндекс Диска"
+            if getattr(self, "_disk_metadata_error", None):
+                disk_note += "; копия правок не обновлена — см. журнал"
+        elif self.disk_dir(make=False):
+            disk_note = "; готово локально, копирование на Яндекс Диск не завершено — см. журнал"
+        else:
+            disk_note = "; готово локально, папка Яндекс Диска не найдена"
         return (f"{out.name} ({mmss(total)}{size})" + (f"; со звуком — подмешано {mix['count']}" if mix else "")
-                + (f"; версий со звуком: {len(vs)}" if vs else "")
-                + ("; копия на Яндекс Диске" if disk else "; Яндекс Диск не найден — копии в облаке нет"))
+                + (f"; версий со звуком: {len(vs)}" if vs else "") + disk_note)
 
     def _voice_pcm(self, audio, sr):
         """Голос после ТОГО ЖЕ выравнивания громкости (и ускорения), что в готовом файле, но до сжатия: в файле «со
@@ -3363,21 +3391,15 @@ class Studio:
         vs = self.store["mix"].get("vars") or {}
         return [x for x in MIX_VARS if vs.get(x[0], True)]
 
-    def _export_mixes(self, a: int, b: int, meta: dict, voice_file: Path, where: str, title: str, audio=None, sr=None, op=None) -> dict:
-        """Версии отрезка со звуками — отдельными файлами рядом с голосовым, каждая в своей папке (MIX_VARS):
-        с эффектами; с эффектами и окружением; с эффектами и музыкой; всё вместе. -> {ключ: {file, count, sig, disk, copy}}.
-        Звуков в отрезке нет вовсе (или все дорожки выключены) — версий нет, прежние файлы убираются. Звуки есть, но в
-        какой-то версии здесь ничего не звучит (в части нет музыки) — в её папку кладётся голосовой файл: версия книги
-        должна быть полной, без дыр. Голос для сведения готовится один раз на все версии."""
+    def _export_mixes(self, a: int, b: int, meta: dict, voice_file: Path, where: str, title: str,
+                      audio=None, sr=None, op=None, staging=None, publication=None) -> dict:
         out = {}
-
+        if staging is None or publication is None:
+            raise Oops("сведение готового файла требует общей транзакции экспорта")
         def drop(vid):
             f = self.var_dir(where, vid) / voice_file.name
             if f.exists():
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
+                publication.append((None, f))
         if not self.mix_sig(a, b, meta):
             for v in MIX_VARS:
                 drop(v[0])
@@ -3387,21 +3409,23 @@ class Studio:
             if op is not None:
                 op.stage("версия «" + name + "»")
             dst = self.var_dir(where, vid) / voice_file.name
+            staged = Path(staging) / "mixes" / vid / voice_file.name
+            staged.parent.mkdir(parents=True, exist_ok=True)
             sig = self.mix_sig(a, b, meta, kinds)
-            if not sig:                                      # в этой версии здесь ничего не звучит — голосовой файл как есть
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dst.with_name(dst.stem + ".tmp" + dst.suffix)
-                shutil.copyfile(voice_file, tmp)
-                os.replace(tmp, dst)
-                out[vid] = dict(file=str(dst), count=0, sig="", copy=True, disk=self._to_disk(dst, f"{where}_{suf}"))
-                continue
-            if voice is None:
-                voice = self._mix_base(voice_file, audio, sr)
-            res = self._export_mix(a, b, meta, voice_file, dst, f"{title} ({'со звуком' if vid == 'all' else name})",
-                                   f"{where}_{suf}", voice, kinds)
+            if not sig:
+                shutil.copyfile(voice_file, staged)
+                res = dict(file=str(dst), count=0, sig="", copy=True, disk=None)
+            else:
+                if voice is None:
+                    voice = self._mix_base(voice_file, audio, sr)
+                res = self._export_mix(a, b, meta, voice_file, staged,
+                                      f"{title} ({'со звуком' if vid == 'all' else name})", f"{where}_{suf}", voice, kinds)
+                if res:
+                    res = dict(res, file=str(dst), sig=sig, disk=None)
             if res:
-                out[vid] = dict(res, sig=sig)
-        for v in MIX_VARS:                                   # выключенные версии: прежний файл этого отрезка устарел бы молча
+                publication.append((staged, dst))
+                out[vid] = res
+        for v in MIX_VARS:
             if v[0] not in out:
                 drop(v[0])
         return out
@@ -3446,7 +3470,7 @@ class Studio:
             tmp.unlink(missing_ok=True)
             raise Oops("ffmpeg не собрал файл со звуком: " + rr.stderr.decode("utf-8", "replace").strip()[:160])
         os.replace(tmp, out)
-        return dict(file=str(out), count=cnt, sig=self.mix_sig(a, b, meta, kinds), disk=self._to_disk(out, sub))
+        return dict(file=str(out), count=cnt, sig=self.mix_sig(a, b, meta, kinds), disk=None)
 
     def chapter_range(self, c: int):
         if c not in self.chapters:
@@ -3464,6 +3488,7 @@ class Studio:
         return self.export_chapter(c)
 
     def export_chapter(self, c: int) -> dict:
+        import copy
         with self.lock:
             a, b, title = self.chapter_range(c)
             anchors = ((self.uids[a], a), (self.uids[b], b))
@@ -3478,29 +3503,27 @@ class Studio:
                 total = self._encode(audio, meta["sr"], meta["chapters"], staged_voice, f"{self.title} — {title}")
                 meta["ref"] = round(active_rms(audio), 5)
                 staged_tech = stage_dir / out.with_suffix(".tech.txt").name
-
                 with self.lock:
                     self._assert_export_current(a, b, meta, anchors)
-                    current_chapter = self.chapters.get(c)
-                    if not current_chapter or tuple(current_chapter[:2]) != (a, b) or current_chapter[2] != title:
-                        raise Oops(f"границы главы {c} изменились во время экспорта; старый готовый файл сохранён.")
+                    current = self.chapters.get(c)
+                    if not current or tuple(current[:2]) != (a, b) or current[2] != title:
+                        raise Oops(f"границы главы {c} изменились во время экспорта; старый готовый файл сохранён")
                     write_atomic(staged_tech, self._tech_txt(meta, title))
-                    op.stage("сведение со звуками и музыкой")
+                    publication = [(staged_voice, out), (staged_tech, out.with_suffix(".tech.txt"))]
                     vs = self._export_mixes(a, b, meta, staged_voice, "glavy", f"{self.title} — {title}",
-                                            audio=audio, sr=meta["sr"], op=op)
+                                           audio=audio, sr=meta["sr"], op=op, staging=stage_dir, publication=publication)
                     mix = vs.get("all")
-                    os.replace(staged_voice, out)
-                    os.replace(staged_tech, out.with_suffix(".tech.txt"))
+                    lk = sum(1 for i in range(a, b+1) if (self.store["segs"].get(self.uids[i]) or {}).get("locked"))
+                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=None, locked=lk,
+                              count=b-a+1, mix=mix, vars=vs, csig=self.cues_sig(a, b))
+                    store = copy.deepcopy(self.store)
+                    store["chapters"].setdefault(str(c), {})["export"] = ex
+                    self._publish_export(stage_dir, publication, store)
                     op.stage("копия на Яндекс Диск")
-                    disk = self._to_disk(out, "glavy")
-                    op.note = self._export_note(out, total, mix, disk, vs)
-
-                    lk = sum(1 for i in range(a, b + 1)
-                             if (self.store["segs"].get(self.uids[i]) or {}).get("locked"))
-                    ex = dict(file=str(out), dur=round(total, 1), at=now(), ver=meta["ver"], disk=disk, locked=lk,
-                              count=b - a + 1, mix=mix, vars=vs, csig=self.cues_sig(a, b))
-                    self.store["chapters"].setdefault(str(c), {})["export"] = ex
-                    self.save(f"собрана глава {c}", {"file": str(out)})
+                    self._copy_export_files(ex, "glavy")
+                    self._publish_export(stage_dir, [], copy.deepcopy(self.store))
+                    op.note = self._export_note(out, total, mix, ex["disk"], vs)
+                    self.journal({"why": f"собрана глава {c}", "file": str(out)})
             return ex
         finally:
             shutil.rmtree(stage_dir, ignore_errors=True)
@@ -5305,9 +5328,7 @@ class Studio:
             acc = "acute"
         model = str(fa.get("model") or ("Qwen/Qwen3-TTS-12Hz-1.7B-Base" if st.get("accent") == "base"
                                         else "shib79/qwen3-tts-12hz-1.7b-ru-stress-cf"))
-        py = Path(sys.executable)
-        if py.name.lower() == "pythonw.exe":
-            py = py.with_name("python.exe")
+        py = Path(self.tool_py("fast"))
         fast = self.root / "nox_fast.py"
         if not fast.exists():
             raise Oops(f"нет {fast} — запустите go, он положит файлы на место")
@@ -5323,6 +5344,8 @@ class Studio:
             cmd.append("--xvec")
         env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1", HF_HOME=str(self.root / "hf"))
         env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+        env.pop("PYTHONHOME", None)
+        env.pop("PYTHONPATH", None)
         lp = self.root / "studio_engine.log"
         try:                                                   # вывод движка копится — большой файл начать заново
             if lp.stat().st_size > 8_000_000 and not self.workers():
@@ -6379,6 +6402,8 @@ class Studio:
             raise Oops(f"нет {self.root / str(args[0])} — запустите go, он положит файлы на место")
         cmd = [self.tool_py(which), str(self.root / str(args[0]))] + [str(x) for x in args[1:]]
         env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1", HF_HOME=str(self.root / "hf"))
+        env.pop("PYTHONHOME", None)
+        env.pop("PYTHONPATH", None)
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
         pr = subprocess.Popen(cmd, cwd=str(self.root), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw)
         out, t0 = [], time.time()
@@ -7350,10 +7375,13 @@ class Studio:
         if cmd:
             args = [cmd, str(self.root)]
         else:
-            ps1 = Path.home() / "Downloads" / "go_kniga1a.ps1"
+            installed_kit = self.release_kit_dir()
+            ps1 = (installed_kit / "go_kniga1a.ps1") if installed_kit else Path.home() / "Downloads" / "go_kniga1a.ps1"
             if not ps1.exists():
                 raise Oops(f"не найден {ps1} — скачайте go_kniga1a.ps1 в Загрузки")
             args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1), "-Root", str(self.root), "-NoStudio"]
+            if installed_kit:
+                args += ["-Pack", str(installed_kit)]
         self.write_fixed()
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
         if os.name != "nt":
@@ -7441,6 +7469,7 @@ class Studio:
 
 
 # ---------------------------------------------------------------------------------------------- HTTP
+Studio = make_studio_class(Studio, globals())
 S: Studio = None
 
 
@@ -7610,7 +7639,14 @@ class H(BaseHTTPRequestHandler):
                 return self._file(wf.with_suffix(".pk"), "application/octet-stream")
             return self._file(wf, "audio/wav")
         if p == "/api/sounds":
-            return self._json(S.sound_list(q.get("q", ""), q.get("kind", "")))
+            return self._json(S.sound_list(q.get("q", ""), q.get("kind", ""), q.get("sec", ""), q.get("grp", ""),
+                                           int(q.get("offset", 0)), int(q.get("limit", 80))))
+        if p == "/api/sound_tree":
+            return self._json(S.sound_tree())
+        if p == "/api/old_voice":
+            return self._json(S.old_voice_for(q.get("uid", ""), int(q.get("limit", 20)), int(q.get("offset", 0)), with_info=True))
+        if p == "/audio/oldtake":
+            return self._file(S.old_voice_path(q.get("sid", ""), q.get("tid", "")), "audio/wav")
         if p == "/audio/cue":
             return self._file(S.cue_clip(int(q.get("n", 1)), re.sub(r"[^c0-9]", "", q.get("id", ""))), "audio/wav")
         if p == "/audio/sound":
@@ -7636,6 +7672,7 @@ class H(BaseHTTPRequestHandler):
             return self._json({"error": "чужой адрес"}, 403)
         if not hmac.compare_digest(self.headers.get("X-Nox-Token") or "", S.token):
             return self._json({"error": "окно устарело — закройте его и откройте студию заново"}, 403)
+        S.mutation_guard()
         ln = int(self.headers.get("Content-Length") or 0)
         u = urllib.parse.urlparse(self.path)
         p = u.path
@@ -7753,10 +7790,19 @@ class H(BaseHTTPRequestHandler):
                     + (f" (из {len(idxs)}; остальные — следующим заходом)" if len(idxs) > len(rids) else ""), "run", "движок")
             return self._json({"rids": rids, "part": S.part_view(k), "engine": S.engine_view()})
         elif p == "/api/take_trim":
-            S.take_trim(str(d.get("uid") or ""), str(d.get("tid") or ""), d.get("t0"), d.get("t1"))
+            S.take_trim(str(d.get("uid") or ""), str(d.get("tid") or ""), d.get("t0"), d.get("t1"), d.get("spans"))
         elif p == "/api/take_next":
-            res = S.take_next(str(d.get("uid") or ""), str(d.get("tid") or ""), d.get("t0"), d.get("t1"))
+            res = S.take_next(str(d.get("uid") or ""), str(d.get("tid") or ""), d.get("t0"), d.get("t1"), d.get("spans"))
             return self._json(dict(res, part=S.part_view(k) if k else None))
+        elif p == "/api/seg_wipe":
+            res = S.wipe_seg(str(d.get("uid") or ""))
+            return self._json(dict(res, part=S.part_view(k) if k else None))
+        elif p == "/api/old_voice_adopt":
+            res = S.old_voice_adopt(str(d.get("uid") or ""), str(d.get("sid") or ""), str(d.get("tid") or ""), bool(d.get("choose")))
+            return self._json(dict(res, part=S.part_view(k) if k else None))
+        elif p == "/api/old_voice_auto":
+            res = S.old_voice_auto(k)
+            return self._json(dict(res, part=S.part_view(k)))
         elif p == "/api/take":
             if d.get("delete"):
                 S.delete_take(d["uid"], d["delete"])
@@ -7794,6 +7840,8 @@ class H(BaseHTTPRequestHandler):
         elif p == "/api/cues_scan":
             res = S.cues_scan(k, d.get("kinds"), bool(d.get("fresh")))
             return self._json(dict(res, part=S.part_view(k)))
+        elif p == "/api/cues_scan_all":
+            return self._json(S.cues_scan_all())
         elif p == "/api/kit_unpack":
             return self._json(S.kit_unpack_start())
         elif p == "/api/cues_kit":
@@ -7804,6 +7852,14 @@ class H(BaseHTTPRequestHandler):
             return self._json({"count": cnt, "part": S.part_view(k)})
         elif p == "/api/mix":
             S.set_mix(d)
+        elif p == "/api/sound_refresh":
+            return self._json(S.sound_refresh())
+        elif p == "/api/sound_root":
+            if d.get("delete"):
+                S.sound_root_del(str(d.get("id") or ""))
+                return self._json({"ok": True, "tree": S.sound_tree()})
+            res = S.sound_root_add(str(d.get("path") or ""), str(d.get("name") or ""))
+            return self._json(dict(res, tree=S.sound_tree()))
         elif p == "/api/sound_map":
             S.set_sound_map(str(d.get("label") or ""), d.get("file"))
         elif p == "/api/boundary":
@@ -8256,6 +8312,17 @@ def main():
         except OSError:
             pass
     try:
+        # Desktop shortcuts enter Python directly, so verify the complete release here too.
+        from nox_update import read_manifest, verify_installed
+        release_record = root / "work" / "nox_release.json"
+        if not release_record.is_file():
+            raise Oops("Для этой книги не установлен полный комплект 18d. Запустите Update_NOX_18d.ps1 -Check из полного архива.")
+        installed = json.loads(release_record.read_text(encoding="utf-8-sig"))
+        bundle = Path(installed["bundle_dir"])
+        manifest = read_manifest(bundle)
+        if installed.get("version") != manifest["product_version"] or installed.get("build") != manifest["build_id"]:
+            raise Oops("Запись версии книги не совпадает с комплектом; запуск остановлен до загрузки правок.")
+        verify_installed(bundle, manifest, root, Path(installed["home"]), 'all')
         if not (root / "nox_audiobook.py").exists() or not (root / "work" / "segments.csv").exists():
             raise Oops(f"в {root} нет подготовленной книги (nox_audiobook.py и work\\segments.csv) — сначала запустите go")
         os.chdir(root)

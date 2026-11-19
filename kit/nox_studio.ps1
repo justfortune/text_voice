@@ -1,65 +1,39 @@
-﻿# nox_studio.ps1 — установка/обновление и запуск «Нокс Студии» (ручная правка аудиокниги поверх черновой озвучки).
-# NOX_STUDIO 2026-11-12a
-#
-# Что делает:
-#   1) кладёт nox_studio.py, nox_studio.html, nox_cues.py (распознаватель мест для звуков) и nox_import.py (загрузка
-#      книг docx/txt/epub/fb2) из Загрузок в D:\nox_audiobook\studio (общая часть, как окружения и модели);
-#   2) делает ярлык «Nox Studio» на рабочем столе и в меню «Пуск» (со своим значком) — дальше запускать ярлыком;
-#   3) снимает «снимок окружения» в D:\nox_audiobook\lock (точные версии пакетов, Python, драйвер, модели) — по нему
-#      потом ставится чистая машина один в один, без сюрпризов от новых версий;
-#   4) запускает студию: отдельное окно на http://127.0.0.1:8765 (наружу не видно, только этот компьютер).
-# Ничего не удаляет и не трогает озвучку. Ручные правки живут в <книга>\studio, готовые части и главы — в <книга>\gotovo.
-#
-# Запуск:  powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\Downloads\nox_studio.ps1"
-# Ключи:   -Root D:\kniga2a (другая книга), -NoStart (только поставить и сделать ярлык),
-#          -NewBook -Root D:\kniga4 (загрузить НОВУЮ книгу: откроется окно выбора файла docx/txt/epub/fb2; в папке
-#          книги появятся чистый book.docx, отчёт import_report.txt и список действующих лиц roles_scan.tsv).
-param([string]$Root = "D:\kniga1a", [switch]$NoStart, [switch]$NewBook, [string]$Import = "")
-$ErrorActionPreference = "Continue"
+﻿# nox_studio.ps1 — запуск проверенного полного комплекта «Нокс Студии».
+# NOX_STUDIO 2026-11-18d
+# Обновление выполняет Update_NOX_18d.ps1. Этот запуск не заменяет код по одному файлу.
+# Ключи -Root, -NoStart, -NewBook, -Import сохранены; -Snapshot обновляет снимок версий.
+param([string]$Root = "D:\kniga1a", [switch]$NoStart, [switch]$NewBook,
+      [string]$Import = "", [string]$NoxHome = "", [string]$Pack = "", [switch]$Snapshot)
+$ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 chcp 65001 | Out-Null
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
-$dl  = "$env:USERPROFILE\Downloads"
-$Src = "D:\nox_audiobook"
-$App = "$Src\studio"
-$KIT = "NOX_STUDIO 2026-11-12a"
-
-# Браузер сохраняет повторные загрузки как "имя (1).ext" — самый свежий файл получает каноническое имя.
-function Use-Newest($pattern) {
-    $groups = Get-ChildItem "$dl\$pattern" -File -ErrorAction SilentlyContinue |
-              Group-Object { ($_.Name -replace ' \(\d+\)(?=\.[^.]+$)', '') }
-    foreach ($g in $groups) {
-        $f = $g.Group | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($f.Name -ne $g.Name) { Move-Item $f.FullName (Join-Path $dl $g.Name) -Force; Write-Host ("  " + $f.Name + " -> " + $g.Name) }
-    }
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONDONTWRITEBYTECODE = "1"
+$Src = if ($NoxHome) { $NoxHome } else { "D:\nox_audiobook" }
+$recordFile = Join-Path $Root "work\nox_release.json"
+if (-not (Test-Path -LiteralPath $recordFile)) { $recordFile = Join-Path $Src "studio\nox_release.json" }
+if (Test-Path -LiteralPath $recordFile) {
+    $releaseInfo = Get-Content -LiteralPath $recordFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $NoxHome -and $releaseInfo.home) { $Src = [string]$releaseInfo.home }
+    if (-not $Pack) { $Pack = [string]$releaseInfo.kit_dir }
 }
-Write-Host "=== Нокс Студия: установка" -ForegroundColor Cyan
-Use-Newest "nox_studio*.py"
-Use-Newest "nox_studio*.html"
-Use-Newest "nox_cues*.py"
-Use-Newest "nox_import*.py"
-New-Item -ItemType Directory -Force -Path $App | Out-Null
-foreach ($f in @("nox_studio.py", "nox_studio.html", "nox_cues.py", "nox_import.py")) {
-    if (Test-Path "$dl\$f") {
-        if (-not (Select-String -Path "$dl\$f" -SimpleMatch $KIT -Quiet)) {
-            Write-Host ("В Загрузках старая версия " + $f + " — скачайте её из последнего сообщения Claude. Ничего не изменено.") -ForegroundColor Red
-            exit 1
-        }
-        Copy-Item "$dl\$f" "$App\$f" -Force
-    }
-    if (-not (Test-Path "$App\$f")) {
-        Write-Host ("Нет файла " + $f + " ни в Загрузках, ни в " + $App + " — скачайте его из сообщения Claude.") -ForegroundColor Red
-        exit 1
-    }
+if (-not $Pack -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'nox_update.py'))) { $Pack = $PSScriptRoot }
+$App = Join-Path $Src 'studio'
+$KIT = "NOX_STUDIO 2026-11-18d"
+$py = Join-Path $Root 'envfast\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $py)) { $py = Join-Path $Src 'envfast\Scripts\python.exe' }
+if (-not (Test-Path -LiteralPath $py)) { throw 'Нет рабочего envfast; запуск не меняет пакеты Python.' }
+if (-not $Pack -or -not (Test-Path -LiteralPath (Join-Path $Pack 'nox_update.py'))) {
+    throw 'Нет полного проверяемого комплекта 18d. Сначала примените Update_NOX_18d.ps1 из распакованного архива.'
 }
-$py = "$Root\envfast\Scripts\python.exe"
-if (-not (Test-Path $py)) { $py = "$Src\envfast\Scripts\python.exe" }
-if (-not (Test-Path $py)) {
-    Write-Host ("Нет окружения озвучки (" + $py + "). Сначала запустите go — он его создаёт.") -ForegroundColor Red
-    exit 1
-}
-$pyw = Join-Path (Split-Path $py) "pythonw.exe"
-if (-not (Test-Path $pyw)) { $pyw = $py }
+$bundleDir = Split-Path -Parent $Pack
+$checkScope = if ($NewBook -or $Import) { 'app' } else { 'all' }
+& $py -B (Join-Path $Pack 'nox_update.py') --root $Root --home $Src --bundle $bundleDir --verify-installed $checkScope --output (Join-Path $env:USERPROFILE 'Downloads')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$pyw = Join-Path (Split-Path $py) 'pythonw.exe'
+if (-not (Test-Path -LiteralPath $pyw)) { $pyw = $py }
+Write-Host '=== Нокс Студия: проверенный комплект 18d' -ForegroundColor Cyan
 
 # ---- загрузка НОВОЙ книги: файл docx/txt/epub/fb2 -> <папка книги>\book.docx + отчёт + действующие лица
 if ($NewBook -or $Import) {
@@ -89,36 +63,16 @@ if ($NewBook -or $Import) {
     exit 0
 }
 
-# Переозвучка на лету идёт через nox_fast.py в папке книги: он должен быть новой версии (понимает заявки студии).
-# Прежние воркеры, если они сейчас работают, от замены файла не страдают — они его уже загрузили.
-Use-Newest "nox_fast*.py"
-# Инструменты книги, которыми пользуется студия: банк голосов и подбор (кнопка «Голоса»), самопроверка ударений,
-# сборка по частям, сведение звука (zvuk_k1a.py: выбор звукового комплекта и партитура книги для дорожек).
-# Обычно их кладёт go; здесь — на случай, если студию обновили отдельно от go.
-foreach ($f in @("nox_voices.py", "nox_stress.py", "nox_part.py", "zvuk_k1a.py")) {
-    Use-Newest ($f -replace '\.py$', '*.py')
-    if ((Test-Path "$dl\$f") -and (Select-String -Path "$dl\$f" -SimpleMatch "NOX_KIT 2026-11-12a" -Quiet) -and (Test-Path "$Root\nox_audiobook.py")) {
-        Copy-Item "$dl\$f" "$Root\$f" -Force
-    }
-}
-$rootFast = "$Root\nox_fast.py"
-$hasQueue = (Test-Path $rootFast) -and (Select-String -Path $rootFast -SimpleMatch "studio_queue" -Quiet)
-if (-not $hasQueue) {
-    if ((Test-Path "$dl\nox_fast.py") -and (Select-String -Path "$dl\nox_fast.py" -SimpleMatch "studio_queue" -Quiet)) {
-        Copy-Item "$dl\nox_fast.py" $rootFast -Force
-        Write-Host "  nox_fast.py в папке книги обновлён: студия сможет переозвучивать фразы на лету"
-    } else {
-        Write-Host "  В папке книги прежний nox_fast.py: слушать и править можно, а переозвучка на лету заработает," -ForegroundColor Yellow
-        Write-Host "  когда скачаете новый nox_fast.py и повторите эту команду (или запустите go с новыми файлами)." -ForegroundColor Yellow
-    }
-}
 if (-not (Test-Path "$Root\work\segments.csv")) {
     Write-Host ("Книга в " + $Root + " ещё не подготовлена (нет work\segments.csv). Сначала запустите go.") -ForegroundColor Red
     exit 1
 }
 
 # значок и ярлыки (рабочий стол + меню «Пуск»)
-& $py "$App\nox_studio.py" --icon "$App\nox_studio.ico"
+if (-not (Test-Path -LiteralPath "$App\nox_studio.ico")) {
+    & $py -B "$App\nox_studio.py" --icon "$App\nox_studio.ico"
+    if ($LASTEXITCODE -ne 0) { throw "Не удалось создать значок Studio; см. ошибку выше." }
+}
 $leaf = Split-Path $Root -Leaf
 $lnkName = if ($leaf.ToLower() -eq "kniga1a") { "Nox Studio.lnk" } else { "Nox Studio ($leaf).lnk" }
 try {
@@ -138,9 +92,14 @@ try {
 
 # снимок окружения: по нему чистая установка повторит рабочую один в один
 $lock = "$Src\lock"
+if ($Snapshot -or -not (Test-Path -LiteralPath "$lock\manifest_18d.json")) {
 New-Item -ItemType Directory -Force -Path $lock | Out-Null
 $snapPy = @'
 import json, os, platform, subprocess, sys, time
+from importlib import metadata
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "studio"))
+from nox_release_io import atomic_write
 from pathlib import Path
 src, root, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
 def run(cmd):
@@ -159,30 +118,31 @@ if hub.is_dir():
         snaps = sorted(p.name for p in (m / "snapshots").iterdir()) if (m / "snapshots").is_dir() else []
         size = sum(f.stat().st_size for f in m.rglob("*") if f.is_file())
         man["models"].append({"name": m.name[8:].replace("--", "/"), "snapshots": snaps, "mb": round(size / 1e6)})
-for name in ("torch", "torchaudio", "transformers", "faster_qwen3_tts", "qwen_tts", "faster_whisper", "ctranslate2",
-             "ruaccent", "onnxruntime", "numpy", "soundfile", "librosa", "docx"):
+for name, dist in (("torch", "torch"), ("torchaudio", "torchaudio"), ("transformers", "transformers"),
+                   ("faster_qwen3_tts", "faster-qwen3-tts"), ("qwen_tts", "qwen-tts"),
+                   ("faster_whisper", "faster-whisper"), ("ctranslate2", "ctranslate2"),
+                   ("ruaccent", "ruaccent"), ("onnxruntime", "onnxruntime"), ("numpy", "numpy"),
+                   ("soundfile", "soundfile"), ("librosa", "librosa"), ("docx", "python-docx")):
     try:
-        mod = __import__(name)
-        man["packages_key"][name] = getattr(mod, "__version__", "?")
-    except Exception as e:
-        man["packages_key"][name] = "нет (" + type(e).__name__ + ")"
-try:
-    import torch
-    man["cuda"] = {"available": torch.cuda.is_available(), "torch_cuda": torch.version.cuda}
-except Exception:
-    pass
+        man["packages_key"][name] = metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        providers = metadata.packages_distributions().get(name, [])
+        man["packages_key"][name] = {d: metadata.version(d) for d in providers} if providers else "не найден дистрибутив"
+man["cuda_note"] = "Загрузка torch/модели при снимке не выполнялась; GPU/драйвер — в поле gpu."
 (out / "envfast.lock.txt").write_text(run([sys.executable, "-m", "pip", "freeze"]) + "\n", encoding="utf-8")
 env_py = root / "env" / "python.exe"
 if env_py.exists():
     (out / "env.lock.txt").write_text(run([str(env_py), "-m", "pip", "freeze"]) + "\n", encoding="utf-8")
     man["python_env"] = run([str(env_py), "-c", "import sys; print(sys.version.split()[0])"])
-(out / "manifest.json").write_text(json.dumps(man, ensure_ascii=False, indent=1), encoding="utf-8")
+atomic_write(out / "manifest.json", json.dumps(man, ensure_ascii=False, indent=1))
+atomic_write(out / "manifest_18d.json", json.dumps(man, ensure_ascii=False, indent=1))
 print("  снимок окружения:", out, "(пакетов в envfast:", len((out / "envfast.lock.txt").read_text(encoding="utf-8").splitlines()), ")")
 '@
 [IO.File]::WriteAllText("$lock\snapshot.py", $snapPy, (New-Object System.Text.UTF8Encoding $false))
 $env:HF_HOME = "$Root\hf"
 & $py "$lock\snapshot.py" $Src $Root $lock $KIT
 if ($LASTEXITCODE -ne 0) { Write-Host "  снимок окружения не снят — студии это не мешает" -ForegroundColor Yellow }
+}
 
 if ($NoStart) {
     if ($env:NOX_FROM_GO -eq "1") { Write-Host "=== Редактор установлен. Окно откроется само, когда go соберёт часть (пока идёт озвучка, окна нет — так и должно быть); позже — ярлыком «Nox Studio» на рабочем столе." -ForegroundColor Green }
@@ -192,4 +152,4 @@ if ($NoStart) {
 Write-Host ("=== Запускаю студию для книги " + $Root) -ForegroundColor Cyan
 Start-Process -FilePath $pyw -ArgumentList ('"' + "$App\nox_studio.py" + '" --root "' + $Root + '"') -WorkingDirectory $Root
 Write-Host "  окно откроется через несколько секунд. Если не открылось — журнал: $Root\studio\studio.log"
-Write-Host "  если книга сейчас озвучивается воркерами прежней версии, они заявки студии не берут: запустите go ещё раз"
+

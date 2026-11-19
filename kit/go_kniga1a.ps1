@@ -1,4 +1,5 @@
 ﻿# go_kniga1a.ps1 — ОДНА КНОПКА: подготовка -> голоса -> окно отправки на Диск -> озвучка аудиоредакции.
+# NOX_KIT 2026-11-18d
 # Нужны в Загрузках: prep_kniga1a.ps1, run_fast.ps1, nox_fast.py, accent_dict.csv, voices_kniga1a.py, voicecheck_k1a.py,
 #   verify_k1a.py (проверка каждой реплики распознаванием речи),
 #   speaker_overrides.tsv (сценарий «кто говорит»), nastroyki_ozvuchki.py (таблица настроек), kniga1.docx.
@@ -19,19 +20,61 @@
 #   -Status — только сказать, где книга сейчас: сколько частей закреплено, что с текущей, сколько осталось. Ничего не запускает.
 # НОВАЯ КНИГА: go -Root D:\имя_папки, рукопись — book.docx в этой папке. Голоса ролям подбираются из банка голосов сами
 #   (nox_voices.py), сменить их можно в студии (кнопка «Голоса»); записывать свои голоса не нужно.
-param([switch]$Base, [switch]$Sparse, [switch]$PrepOnly, [switch]$NoGpu, [switch]$Probe, [switch]$Map, [switch]$All, [switch]$NoStudio, [switch]$Status, [string]$Pack = "", [double]$Tempo = 0, [string]$Root = "D:\kniga1a")
+param([switch]$Base, [switch]$Sparse, [switch]$PrepOnly, [switch]$NoGpu, [switch]$Probe, [switch]$Map, [switch]$All, [switch]$NoStudio, [switch]$Status, [string]$Pack = "", [double]$Tempo = 0, [string]$Root = "D:\kniga1a", [string]$NoxHome = "", [string]$Dict = "", [string]$Overrides = "", [string]$StressFixes = "")
 $ErrorActionPreference = "Continue"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 chcp 65001 | Out-Null
 $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
-$dl = "$env:USERPROFILE\Downloads"
-if ($Pack) { $dl = $Pack }        # комплект nox_all: все файлы из его папки, Загрузки не смотрим
-$Src = "D:\nox_audiobook"
-$PyFast = "$Src\envfast\Scripts\python.exe"
+$Inputs = "$env:USERPROFILE\Downloads"
+$dl = $Inputs
+$Src = if ($NoxHome) { $NoxHome } else { "D:\nox_audiobook" }
+$releaseInfo = $null
+$releaseFile = Join-Path $Root "work\nox_release.json"
+if (Test-Path -LiteralPath $releaseFile) {
+    try { $releaseInfo = Get-Content -LiteralPath $releaseFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json }
+    catch { Write-Host "Не читается запись установленного комплекта. Файлы книги не менялись." -ForegroundColor Red; exit 1 }
+    if (-not $NoxHome -and $releaseInfo.home) { $Src = [string]$releaseInfo.home }
+    if (-not $Pack -and $releaseInfo.kit_dir) { $Pack = [string]$releaseInfo.kit_dir }
+}
+if (-not $Pack -and (Test-Path -LiteralPath (Join-Path $Src 'studio\nox_release.json'))) {
+    try { $sharedRelease = Get-Content -LiteralPath (Join-Path $Src 'studio\nox_release.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json }
+    catch { Write-Host "Не читается запись общего комплекта; запуск остановлен." -ForegroundColor Red; exit 1 }
+    $Pack = [string]$sharedRelease.kit_dir
+}
+if (-not $Pack -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot "nox_update.py"))) { $Pack = $PSScriptRoot }
+if ($Pack) { $dl = $Pack }
+$PyFast = "$Root\envfast\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $PyFast)) { $PyFast = "$Src\envfast\Scripts\python.exe" }
+
+# Статус выполняется до любых копирований, переименований, pip и записи настроек.
+if ($Status) {
+    $statusScript = Join-Path $dl "nox_status.py"
+    if (-not (Test-Path -LiteralPath $statusScript)) { $statusScript = Join-Path $Root "nox_status.py" }
+    if (-not (Test-Path -LiteralPath $statusScript) -or -not (Test-Path -LiteralPath $PyFast)) {
+        Write-Host "Нет установленного средства чтения статуса или Python; подготовка не запускалась." -ForegroundColor Red
+        exit 1
+    }
+    & $PyFast -B $statusScript --root $Root
+    exit $LASTEXITCODE
+}
+if ($Pack -and -not $releaseInfo -and (Test-Path -LiteralPath "$Root\work\segments.csv")) {
+    Write-Host "Подготовленная книга ещё не обновлена целым комплектом 18d. Сначала выполните Update_NOX_18d.ps1 -Check; go ничего не менял." -ForegroundColor Red
+    exit 1
+}
+if ($Pack) {
+    $packageRoot = Split-Path -Parent $Pack
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot "release_manifest.json"))) {
+        Write-Host "Нет манифеста комплекта 18d. Используйте полный проверенный архив." -ForegroundColor Red
+        exit 1
+    }
+    & $PyFast -B (Join-Path $Pack "nox_update.py") --root $Root --home $Src --bundle $packageRoot --verify-bundle
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+}
 
 # Браузер сохраняет повторные загрузки как "имя (1).ext" — берём самый свежий файл и даём ему каноническое имя,
 # чтобы старая версия не запускалась по ошибке.
 function Use-Newest($pattern, $canon) {
+    if ($Pack) { return }  # неизменяемый комплект уже проверен по SHA-256
     # «имя (1).ext», «имя (2).ext» -> самое свежее становится «имя.ext»; разные имена (speaker_overrides_kniga2a.tsv
     # и speaker_overrides.tsv) — разные семейства и друг друга не затирают
     $groups = Get-ChildItem "$dl\$pattern" -File -ErrorAction SilentlyContinue |
@@ -63,7 +106,7 @@ Use-Newest "nox_part*.py" "nox_part.py"
 Use-Newest "nox_stress*.py" "nox_stress.py"
 Use-Newest "nox_voices*.py" "nox_voices.py"
 # Все файлы комплекта должны быть одной версии: старый файл в Загрузках (не скачался) — стоп, с понятным списком
-$KIT = "NOX_KIT 2026-11-12a"
+$KIT = "NOX_KIT 2026-11-18d"
 $env:NOX_FROM_GO = "1"      # prep и установщик студии узнают, что их запустил go: их советы для ручного запуска не печатаются
 $kitFiles = @("prep_kniga1a.ps1", "nox_fast.py", "verify_k1a.py", "voicecheck_k1a.py", "nastroyki_ozvuchki.py", "razmetka_k1a.py", "zvuk_k1a.py",
               "nox_part.py", "nox_stress.py", "nox_voices.py")
@@ -81,7 +124,7 @@ $IsBook1 = ($leafB -like "kniga1*")
 function Run-Map {
     foreach ($f in @("razmetka_k1a.py", "nox_fast.py")) { if (Test-Path "$dl\$f") { Copy-Item "$dl\$f" "$Root\$f" -Force } }
     if ((Test-Path "$Root\razmetka_k1a.py") -and (Test-Path "$Root\nox_audiobook.py") -and (Test-Path "$Root\work\segments.csv")) {
-        & "$Root\envfast\Scripts\python.exe" "$Root\razmetka_k1a.py"
+        & $PyFast "$Root\razmetka_k1a.py"
         if ($LASTEXITCODE -ne 0) { Write-Host "  разметка не создана — пришлите вывод в чат (озвучке это не мешает)" -ForegroundColor Yellow }
     } else { Write-Host "  разметка: книга ещё не подготовлена — будет при обычном запуске go" -ForegroundColor Yellow }
 }
@@ -95,7 +138,7 @@ Write-Host "=== Настройки озвучки: $Root\Настройки оз
 New-Item -ItemType Directory -Force -Path $Root, "$Root\work" | Out-Null
 if (Test-Path "$dl\nastroyki_ozvuchki.py") { Copy-Item "$dl\nastroyki_ozvuchki.py" "$Root\nastroyki_ozvuchki.py" -Force }
 & $PyFast -c "import openpyxl" 2>$null
-if ($LASTEXITCODE -ne 0) { Write-Host "  ставлю openpyxl (таблицы Excel), разово"; & $PyFast -m pip install -q openpyxl }
+if ($LASTEXITCODE -ne 0) { if ($releaseInfo) { throw "В рабочем envfast не импортируется openpyxl. Пакеты не менялись." }; Write-Host "  ставлю openpyxl (таблицы Excel), разово"; & $PyFast -m pip install -q openpyxl }
 $st = $null
 if (Test-Path "$Root\nastroyki_ozvuchki.py") {
     & $PyFast "$Root\nastroyki_ozvuchki.py" read $Root
@@ -143,20 +186,6 @@ function Part-Status {
     } catch { return $null }
 }
 
-if ($Status) {
-    # где книга сейчас — словами; ничего не останавливает и не запускает
-    if (-not (Test-Path "$Root\nox_audiobook.py") -or -not (Test-Path "$Root\work\segments.csv")) {
-        Write-Host "Книга ещё не подготовлена — запустите go без ключей." -ForegroundColor Yellow
-        exit 0
-    }
-    if (Test-Path "$dl\nox_part.py") { Copy-Item "$dl\nox_part.py" "$Root\nox_part.py" -Force }
-    if (-not (Select-String -Path "$Root\nox_audiobook.py" -SimpleMatch "NOX_STAGE = 21" -Quiet)) {
-        Write-Host "Конвейер в папке книги прежней версии — запустите go без ключей, он обновит его." -ForegroundColor Yellow
-        exit 0
-    }
-    & $PyFast "$Root\nox_part.py" --root $Root --report @partArgs
-    exit 0
-}
 Write-Host "=== Останавливаю старые воркеры озвучки и прежнее окно отправки на Диск этой книги" -ForegroundColor Cyan
 # только процессы ЭТОЙ книги (путь $Root в командной строке): озвучка другой книги продолжает работать
 $rootPat = "*" + $Root.TrimEnd('\') + "\*"
@@ -174,18 +203,19 @@ if (-not $NoGpu) {
     Remove-Item "$Root\work\asr_active.txt" -Force -ErrorAction SilentlyContinue
 } else { Write-Host "  -NoGpu: ничего не останавливаю (только подготовка)" }
 
-$prepArgs = @("-Root", $Root, "-Model", $Model, "-Accent", $Accent, "-MaxChars", $MaxChars)
+$prepArgs = @("-Root", $Root, "-Src", $Src, "-Model", $Model, "-Accent", $Accent, "-MaxChars", $MaxChars)
 # название книги — защита от чужой рукописи (оно должно быть в начале файла); у новой книги, пока название не вписано
 # в таблицу настроек, там стоит имя папки — тогда проверки нет
 if ($Title -and $Title -ne (Split-Path $Root -Leaf)) { $prepArgs += @("-Title", $Title) }
 $docxCands = @()
 if ($DocxSet) { $docxCands += [Environment]::ExpandEnvironmentVariables($DocxSet) }
-if ($leafB -like "kniga2*") { $docxCands += @("$dl\kniga2.docx", "$Root\book.docx", "D:\kniga2\book.docx") }
-elseif ($leafB -like "kniga3*") { $docxCands += @("$dl\kniga3.docx", "$Root\book.docx") }
-elseif ($IsBook1) { $docxCands += @("$dl\kniga1.docx", "$Root\book.docx") }
+if ($releaseInfo -and (Test-Path -LiteralPath "$Root\book.docx")) { $docxCands += "$Root\book.docx" }
+if ($leafB -like "kniga2*") { $docxCands += @("$Inputs\kniga2.docx", "$Root\book.docx", "D:\kniga2\book.docx") }
+elseif ($leafB -like "kniga3*") { $docxCands += @("$Inputs\kniga3.docx", "$Root\book.docx") }
+elseif ($IsBook1) { $docxCands += @("$Inputs\kniga1.docx", "$Root\book.docx") }
 else {
     # новая книга: её рукопись — book.docx в её папке (или <имя папки>.docx в Загрузках, или единственный .docx в папке)
-    $docxCands += @("$Root\book.docx", "$dl\$leafB.docx")
+    $docxCands += @("$Root\book.docx", "$Inputs\$leafB.docx")
     $one = @(Get-ChildItem "$Root\*.docx" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "~*" })
     if ($one.Count -eq 1) { $docxCands += $one[0].FullName }
 }
@@ -200,10 +230,23 @@ $ShareFrom = Cfg "share_from" ""
 # несколько книг через «;» — роли и голоса для новой книги берутся из первой, где они уже есть
 $SeedPick = "$ShareFrom".Split(";") | ForEach-Object { $_.Trim() } | Where-Object { $_ -and (Test-Path "$_\work\roles.json") } | Select-Object -First 1
 if ($SeedPick) { $prepArgs += @("-SeedFrom", $SeedPick) }
-if ($Pack) { $prepArgs += @("-Dict", "$Pack\accent_dict.csv", "-FastPy", "$Pack\nox_fast.py") }
+$dictIn = $Dict
+if (-not $dictIn -and (Test-Path -LiteralPath "$Root\work\accent_dict.csv")) { $dictIn = "$Root\work\accent_dict.csv" }
+if (-not $dictIn) { $dictIn = "$Inputs\accent_dict.csv" }
+if ($Dict -and -not (Test-Path -LiteralPath $Dict)) { throw "Нет явно заданного словаря: $Dict" }
+if (Test-Path -LiteralPath $dictIn) { $prepArgs += @("-Dict", $dictIn) }
+if ($Pack) { $prepArgs += @("-FastPy", "$Pack\nox_fast.py") }
+$stressIn = $StressFixes
+if (-not $stressIn -and (Test-Path -LiteralPath "$Root\work\stress_fixes.tsv")) { $stressIn = "$Root\work\stress_fixes.tsv" }
+if (-not $stressIn) { $stressIn = "$Inputs\stress_fixes_$leafB.tsv" }
+if ($StressFixes -and -not (Test-Path -LiteralPath $StressFixes)) { throw "Нет явно заданного файла ударений: $StressFixes" }
+if (Test-Path -LiteralPath $stressIn) { $prepArgs += @("-StressFixes", $stressIn) }
 # Сценарий ролей ЭТОЙ книги — явно, без угадывания по дате: speaker_overrides_<книга>.tsv из Загрузок.
 # Для книги 1 в нём должны быть исправления ролей от 05.11 (явная разметка «=», 115 абзацев) — иначе стоп.
-$ovrFile = "$dl\speaker_overrides_$leafB.tsv"
+$ovrFile = $Overrides
+if (-not $ovrFile -and (Test-Path -LiteralPath "$Root\work\speaker_overrides.tsv")) { $ovrFile = "$Root\work\speaker_overrides.tsv" }
+if (-not $ovrFile) { $ovrFile = "$Inputs\speaker_overrides_$leafB.tsv" }
+if ($Overrides -and -not (Test-Path -LiteralPath $Overrides)) { throw "Нет явно заданного сценария ролей: $Overrides" }
 if (Test-Path $ovrFile) {
     $nEq = @(Select-String -Path $ovrFile -Pattern "`t=`t" -SimpleMatch -Encoding UTF8).Count
     $nBang = @(Select-String -Path $ovrFile -Pattern "`t!`t" -SimpleMatch -Encoding UTF8).Count
@@ -230,10 +273,10 @@ function Sig-Of($paths, $extra) {
     $sha = [System.Security.Cryptography.SHA1]::Create()
     return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($sb.ToString())))).Replace("-", "")
 }
-$swFile = Get-ChildItem "$dl\stress_words*.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$dictIn = if ($Pack) { "$Pack\accent_dict.csv" } else { "$dl\accent_dict.csv" }
+$swFile = Get-Item -LiteralPath "$Root\work\stress_words.txt" -ErrorAction SilentlyContinue
+if (-not $swFile) { $swFile = Get-ChildItem "$Inputs\stress_words*.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
 $fastIn = if ($Pack) { "$Pack\nox_fast.py" } else { "$dl\nox_fast.py" }
-$prepIn = @("$dl\prep_kniga1a.ps1", "$Src\nox_audiobook.py", "$Src\nox_fast.py", $docxPick, $ovrFile, $dictIn, $fastIn, $(if ($swFile) { $swFile.FullName } else { "" }))
+$prepIn = @("$dl\prep_kniga1a.ps1", "$Src\nox_audiobook.py", "$Src\nox_fast.py", $docxPick, $ovrFile, $dictIn, $stressIn, $fastIn, $(if ($swFile) { $swFile.FullName } else { "" }))
 $prepSig = Sig-Of $prepIn (($prepArgs -join "|") + "|" + $KIT)
 $prepOld = ""
 if (Test-Path "$Root\work\prep.sig") { $prepOld = (Get-Content "$Root\work\prep.sig" -Raw -ErrorAction SilentlyContinue) }
@@ -250,8 +293,15 @@ if ($prepReady -and $prepOld -and ($prepOld.Trim() -eq $prepSig)) {
     if ($LASTEXITCODE -ne 0) { Write-Host "Подготовка не прошла — пришлите вывод в чат" -ForegroundColor Red; exit 1 }
     [IO.File]::WriteAllText("$Root\work\prep.sig", $prepSig, (New-Object System.Text.UTF8Encoding $false))
 }
+# A newly prepared book receives the same checked release record and code set.
+# Existing prepared books were required to use the explicit updater above.
+if ($Pack -and -not $releaseInfo) {
+    & $PyFast -B (Join-Path $Pack 'nox_update.py') --root $Root --home $Src --bundle $packageRoot --output $Inputs --downloads $Inputs --apply
+    if ($LASTEXITCODE -ne 0) { Write-Host "Новая книга подготовлена, но полный комплект не установлен; причина выше." -ForegroundColor Red; exit 1 }
+    $releaseInfo = Get-Content -LiteralPath (Join-Path $Root 'work\nox_release.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+}
 # файлы работы по частям, самопроверки ударений и банка голосов — в папку книги
-foreach ($f in @("nox_part.py", "nox_stress.py", "nox_voices.py", "zvuk_k1a.py")) { if (Test-Path "$dl\$f") { Copy-Item "$dl\$f" "$Root\$f" -Force } }
+foreach ($f in @("nox_part.py", "nox_stress.py", "nox_voices.py", "zvuk_k1a.py", "nox_freeze.py", "nox_status.py", "nox_release_io.py", "nox_audio_archive.py", "nox_file_transactions.py", "nox_voice_safety.py")) { if (Test-Path "$dl\$f") { Copy-Item "$dl\$f" "$Root\$f" -Force } }
 
 if ($ByParts) { Write-Host "=== Аудит слоя текста всей книги не нужен: записи текущей части сверяются перед её озвучкой (ниже)" -ForegroundColor Cyan }
 else { Write-Host "=== Аудит слоя текста: что именно будет прочитано; переозвучка только изменившегося" -ForegroundColor Cyan }
@@ -265,7 +315,7 @@ $auditPy = @'
    или запись не прошла проверку дозаписанности: обрыв на громком звуке / слишком быстрый темп (выброшены слова) /
    «упёрлось в лимит» из suspicious.txt;
    wav без .txt (озвучен до появления аудита, прежним слоем текста) считается устаревшим всегда;
- - собранные части удаляются (пересоберутся из правильных wav), parts.json/durations.json тоже.
+ - подписи незакреплённых частей сбрасываются; прежние аудиофайлы остаются до успешной пересборки.
 Отчёт по сброшенным: work/audit_purged.txt. Если слой не менялся — ничего не делает."""
 import re
 import sys
@@ -397,11 +447,14 @@ for k, r in enumerate(rows, 1):
         else:
             why = "озвучен прежним слоем текста (нет .txt с прочитанным текстом)"
         if why:
-            p.unlink()
-            if side.exists():
-                side.unlink()
-            for f in [p.with_suffix(x) for x in (".ok", ".meta", ".gaps")] + list(p.parent.glob(p.stem + ".rej*")):   # отметки проверки, попытки
-                f.unlink(missing_ok=True)
+            from nox_audio_archive import archive_stem
+            def unchanged_unlocked():
+                fresh = n.load_rows()
+                if k > len(fresh) or fresh[k - 1] != r:
+                    raise RuntimeError("разбивка изменилась во время аудита; прежнее аудио сохранено")
+                return (k - 1) not in n.fixed_set(fresh)
+            if archive_stem(n.WORK.parent, p.stem, why, target_row=dict(r), precondition=unchanged_unlocked) is None:
+                continue
             removed += 1
             purged.append(f"{r['id']}\tгл.{r['chapter']}\t{why}\t{txt[:90]}")
     if k % 2000 == 0:
@@ -423,35 +476,46 @@ if RECOMPUTE:
 orphans = 0
 if n.WAVS.is_dir():
     expected = {n.wav_for(r, roles).stem for r in rows}
-    for f in n.WAVS.iterdir():
-        # ключ = имя до первой точки: <ключ>.wav/.txt/.ok, <ключ>.rej1.wav/.json — попытки и отметки проверки
-        if f.suffix.lower() in (".wav", ".txt", ".ok", ".json", ".meta", ".gaps") and f.name.split(".")[0] not in expected:
-            try:
-                f.unlink()
-                if f.suffix.lower() == ".wav":
-                    orphans += 1
-            except OSError:
-                pass
-parts_removed = 0
-if removed or SEG_CHANGED or orphans:     # записи сменились — части собираются заново целиком (и на Диске)
-    dirs = ([n.PARTS] if n.PARTS.is_dir() else []) + [Path(a) for a in sys.argv[1:2] if Path(a).is_dir()]
-    for dp in dirs:
-        for f in [x for x in dp.glob("part_*.*") if x.suffix.lower() in (".mp3", ".m4b", ".wav")] \
-                + [dp / "book.mp3", dp / "book.m4b"]:            # только аудио — рукопись book.docx не трогаем
-            _m = re.match(r"part_(\d+)", f.name)
-            if _m and dp == n.PARTS and int(_m.group(1)) <= _nfx:
-                continue                                         # часть закреплена автором
-            if f.exists():
-                f.unlink()
-                parts_removed += 1
-    for f in (n.PARTS_INDEX, n.DUR_CACHE):
-        if f.exists():
-            f.unlink()
+    from nox_audio_archive import archive_stem
+    obsolete = sorted({f.name.split(".")[0] for f in n.WAVS.iterdir()
+                       if f.is_file() and f.suffix.lower() in (".wav", ".txt", ".ok", ".json", ".meta", ".gaps")
+                       and f.name.split(".")[0] not in expected})
+    for stem in obsolete:
+        def still_orphan():
+            fresh = n.load_rows()
+            n.fixed_set(fresh)  # Invalid protection must stop the audit before a move.
+            current_roles = n.load_roles()
+            return stem not in {n.wav_for(row, current_roles).stem for row in fresh}
+        if archive_stem(n.WORK.parent, stem, "прежняя разбивка или роль", precondition=still_orphan) is not None:
+            orphans += 1
+parts_invalidated = 0
+if removed or SEG_CHANGED or orphans:
+    import time
+    from nox_file_transactions import directory_lock
+    from nox_freeze import read_protection
+    from nox_release_io import atomic_write
+    with directory_lock(n.WORK.parent / "studio" / "transactions"):
+        state = read_protection(n.WORK.parent, n.load_rows())
+        fixed_numbers = {v[2] for v in state.ranges}
+        if n.PARTS_INDEX.exists():
+            old_parts = json.loads(n.PARTS_INDEX.read_text(encoding="utf-8-sig"))
+            if not isinstance(old_parts, list):
+                raise RuntimeError("неверный parts.json; готовые файлы сохранены")
+            for part in old_parts:
+                if int(part["n"]) not in fixed_numbers:
+                    part["sig"] = None
+                    parts_invalidated += 1
+            atomic_write(n.PARTS_INDEX, json.dumps(old_parts, ensure_ascii=False, indent=1))
+        # Duration is a derived cache. Keep its old bytes with the audit before invalidation.
+        if n.DUR_CACHE.exists():
+            history = n.WORK / "cache_history" / (str(time.time_ns()) + "_durations.json")
+            atomic_write(history, n.DUR_CACHE.read_bytes())
+            n.DUR_CACHE.unlink()
 ver_file.write_text(cur, encoding="utf-8")
 seg_file.write_text(seg_sig, encoding="utf-8")
 if removed and sp.exists():
     sp.unlink()
-print(f"  озвучено было {voiced}; на переозвучку {removed}; частей удалено {parts_removed}; устаревших wav убрано {orphans}")
+print(f"  озвучено было {voiced}; на переозвучку {removed}; частей помечено для пересборки {parts_invalidated}; прежних записей сохранено в work/audio_history: {orphans}")
 print(f"  словарь: {sum(dict_cnt.values())} замен; слов с ударением от ruaccent: {len(dbl_cnt)} форм; слов вне словаря ruaccent: {len(neural)}")
 print("  отчёты: work\\audit_summary.txt (кратко), work\\audit_text.txt (весь текст как будет прочитан), work\\audit_purged.txt")
 if RECOMPUTE and getattr(n, "STRESS_FIX_PATH", None) is not None and Path(n.STRESS_FIX_PATH).exists():
@@ -459,15 +523,18 @@ if RECOMPUTE and getattr(n, "STRESS_FIX_PATH", None) is not None and Path(n.STRE
     print(f"  ударения по месту: поправок в файле {_nf}; не подошло (текст реплики изменился) {getattr(n, 'SFIX_MISSED', 0)}")
 '@
 [IO.File]::WriteAllText("$Root\audit_k1a.py", $auditPy, (New-Object System.Text.UTF8Encoding $false))
-$sfx = "$dl\stress_fixes_" + (Split-Path $Root -Leaf).ToLower() + ".tsv"     # ударения по месту для ЭТОЙ книги
+$sfx = $StressFixes
+if (-not $sfx -and (Test-Path -LiteralPath "$Root\work\stress_fixes.tsv")) { $sfx = "$Root\work\stress_fixes.tsv" }
+if (-not $sfx) { $sfx = "$Inputs\stress_fixes_" + (Split-Path $Root -Leaf).ToLower() + ".tsv" }
+if ($StressFixes -and -not (Test-Path -LiteralPath $StressFixes)) { throw "Нет явно заданного файла ударений: $StressFixes" }     # ударения по месту для ЭТОЙ книги
 if (Test-Path $sfx) {
     $okBook = (Get-Content $sfx -Encoding UTF8 -TotalCount 1) -match ("^# book: " + (Split-Path $Root -Leaf).ToLower())
-    if ($okBook) { Copy-Item $sfx "$Root\work\stress_fixes.tsv" -Force; Write-Host ("  ударения по месту: " + $sfx) }
+    if ($okBook) { if ([IO.Path]::GetFullPath($sfx) -ne [IO.Path]::GetFullPath("$Root\work\stress_fixes.tsv")) { Copy-Item $sfx "$Root\work\stress_fixes.tsv" -Force }; Write-Host ("  ударения по месту: " + $sfx) }
     else { Write-Host ("  " + $sfx + " — от другой книги, не беру") -ForegroundColor Yellow }
 }
 $env:HF_HOME = "$Root\hf"
 if (-not $ByParts) {
-    & "$Root\envfast\Scripts\python.exe" "$Root\audit_k1a.py" $Dest $Model $Accent --qc
+    & $PyFast "$Root\audit_k1a.py" $Dest $Model $Accent --qc
     if ($LASTEXITCODE -ne 0) { Write-Host "аудит не выполнился — пришлите вывод в чат" -ForegroundColor Red; exit 1 }
 }
 
@@ -553,7 +620,7 @@ Write-Host "=== Проверка образцов голосов по высот
 if (Test-Path "$dl\voicecheck_k1a.py") { Copy-Item "$dl\voicecheck_k1a.py" "$Root\voicecheck_k1a.py" -Force }
 if (Test-Path "$Root\voicecheck_k1a.py") {
     for ($round = 1; $round -le 2; $round++) {      # не больше 2 кругов за запуск (каждый круг — минуты); дальше решает автор
-        & "$Root\envfast\Scripts\python.exe" "$Root\voicecheck_k1a.py"
+        & $PyFast "$Root\voicecheck_k1a.py"
         $recast = @()
         if (Test-Path "$Root\work\recast.txt") { $recast = Get-Content "$Root\work\recast.txt" -Encoding UTF8 | Where-Object { $_.Trim() } }
         if ($recast.Count -eq 0) { break }
@@ -592,10 +659,10 @@ function After-Part($num) {
         if ($LASTEXITCODE -ne 0) { Write-Host "  самопроверка ударений не выполнилась (озвучке это не мешает) — пришлите вывод в чат" -ForegroundColor Yellow }
     }
     if (Test-Path "$dl\nox_studio.ps1") {
-        if ($NoStudio) { powershell -NoProfile -ExecutionPolicy Bypass -File "$dl\nox_studio.ps1" -Root $Root -NoStart | Out-Null }
+        if ($NoStudio) { powershell -NoProfile -ExecutionPolicy Bypass -File "$dl\nox_studio.ps1" -Root $Root -NoxHome $Src -Pack $dl -NoStart | Out-Null }
         else {
             Write-Host "=== Открываю «Нокс Студию»: прослушайте часть, поправьте, что нужно, и закрепите её" -ForegroundColor Cyan
-            powershell -NoProfile -ExecutionPolicy Bypass -File "$dl\nox_studio.ps1" -Root $Root
+            powershell -NoProfile -ExecutionPolicy Bypass -File "$dl\nox_studio.ps1" -Root $Root -NoxHome $Src -Pack $dl
         }
     }
     try { [console]::beep(784, 180); [console]::beep(988, 260) } catch {}    # часть готова — короткий сигнал
@@ -629,6 +696,7 @@ if ($AsrOn -and (Test-Path "$Root\verify_k1a.py")) {
     Write-Host "=== Проверка каждой реплики распознаванием речи (Whisper на процессоре; недочитанное переозвучивается)" -ForegroundColor Cyan
     & $PyFast -c "import faster_whisper" 2>$null
     if ($LASTEXITCODE -ne 0) {
+        if ($releaseInfo) { throw "В рабочем envfast не импортируется faster_whisper, а проверка речи включена. Пакеты не менялись; озвучка не запущена без обязательной проверки." }
         Write-Host "  ставлю распознаватель faster-whisper в envfast, разово (уже стоящие пакеты не меняются)"
         $cons = "$Root\work\pip_constraints.txt"
         & $PyFast -m pip freeze 2>$null | Where-Object { $_ -match '^[A-Za-z0-9_.\-]+==' } | Set-Content $cons -Encoding ASCII
@@ -711,15 +779,18 @@ if ((Test-Path "$Root\zvuk_k1a.py") -and $zkit) {
 # Воркеры озвучки сами обслуживают его заявки на переозвучку фраз — отдельная модель в видеопамяти не нужна.
 if (Test-Path "$dl\nox_studio.ps1") {
     Write-Host "=== Редактор ручной правки «Нокс Студия»" -ForegroundColor Cyan
-    powershell -NoProfile -ExecutionPolicy Bypass -File "$dl\nox_studio.ps1" -Root $Root -NoStart
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$dl\nox_studio.ps1" -Root $Root -NoxHome $Src -Pack $dl -NoStart
+    if ($LASTEXITCODE -ne 0) { Write-Host "Комплект Studio не прошёл проверку; озвучка не запущена." -ForegroundColor Red; exit 1 }
     if (-not $ByParts) { Write-Host "  когда соберётся первая часть — ярлык «Nox Studio» на рабочем столе: правка, переозвучка фраз, закрепление" }
 }
 
 Write-Host ("=== Озвучка (быстрый движок, воркеров: " + $Workers + ")") -ForegroundColor Cyan
-$rfArgs = @("-Root", $Root, "-Workers", "$Workers", "-Model", $Model, "-Accent", $Accent)
+$rfArgs = @("-Root", $Root, "-NoxHome", $Src, "-Workers", "$Workers", "-Model", $Model, "-Accent", $Accent)
 if ($Pack) { $rfArgs += @("-FastPy", "$Pack\nox_fast.py") }
 if ($ByParts) { $rfArgs += "-ByParts" }
 powershell -NoProfile -ExecutionPolicy Bypass -File "$dl\run_fast.ps1" @rfArgs
+$workersExit = $LASTEXITCODE
+if ($workersExit -ne 0) { Write-Host "Воркеры сообщили об ошибке; готовые записи сохранены, смотрите fast_w*.log и log_fast.txt." -ForegroundColor Red }
 if ($ByParts) {
     # воркеры вышли: часть либо собрана, либо сборщик её дособирает (ждёт последние отметки проверки) — дождаться
     if ($partProc -and -not $partProc.HasExited) {
@@ -734,3 +805,5 @@ if ($ByParts) {
         Write-Host ("=== Часть " + $(if ($pst) { $pst.part } else { "?" }) + " пока не собрана: озвучено " + $(if ($pst) { "" + $pst.have + " из " + $pst.total } else { "?" }) + " реплик. Причина — в " + $Root + "\part.log, work\failed.txt, work\asr_log.txt. Запустите go ещё раз.") -ForegroundColor Yellow
     }
 }
+
+if ($workersExit -ne 0) { exit $workersExit }

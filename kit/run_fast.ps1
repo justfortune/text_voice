@@ -1,5 +1,5 @@
 ﻿# run_fast.ps1 — быстрая озвучка (v7): движок faster-qwen3-tts с CUDA-графами вместо медленного цикла Python.
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 # Та же книга, те же голоса, тот же wav-кэш — меняется только скорость шага генерации.
 #
 # Что делает сам:
@@ -16,6 +16,7 @@
 
 param(
     [string]$Root    = "D:\nox_audiobook",
+    [string]$NoxHome = "",
     [string] $Accent = "acute",         # acute: знак ударения для ru-stress модели; none: чистый текст
     [int]   $Workers = 2,          # быстрых воркеров на 3090/24 ГБ: 2 (можно 3, если смотреть за памятью)
     [switch]$Xvec,                 # режим «только тембр»: ещё быстрее, интонация чуть менее похожа
@@ -65,7 +66,7 @@ try {
     # ------------------------------------------------------------- 1. остановить старые synth-воркеры (не watch)
     Step "Старые воркеры synth"
     $old = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-           Where-Object { $_.CommandLine -like "*nox_audiobook.py*synth*" }
+           Where-Object { $_.CommandLine -like "*nox_audiobook.py*synth*" -and $_.CommandLine -like ("*" + $Root.TrimEnd('\') + "\*") }
     if ($old) {
         foreach ($pr in $old) {
             Write-Host ("  останавливаю PID " + $pr.ProcessId + " (" + $pr.CommandLine.Substring(0, [math]::Min(90, $pr.CommandLine.Length)) + "...)")
@@ -76,20 +77,27 @@ try {
 
     # замки, брошенные упавшими/убитыми воркерами (сейчас synth не работает, поэтому можно убрать все)
     $fastRunning = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-                   Where-Object { $_.CommandLine -like "*nox_fast*" }
+                   Where-Object { $_.CommandLine -like "*nox_fast*" -and $_.CommandLine -like ("*" + $Root.TrimEnd('\') + "\*") }
     if (-not $fastRunning) {
         $locks = Get-ChildItem "$Root\work\wav\*.lock" -ErrorAction SilentlyContinue
         if ($locks) { $locks | Remove-Item -Force -ErrorAction SilentlyContinue; Write-Host ("  убрано замков: " + $locks.Count) }
     }
 
     # ------------------------------------------------------------- 2. окружение envfast
+    if (-not $NoxHome -and (Test-Path -LiteralPath "$Root\work\nox_release.json")) {
+        $rel = Get-Content -LiteralPath "$Root\work\nox_release.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+        $NoxHome = [string]$rel.home
+    }
+    if (-not $NoxHome) { $NoxHome = 'D:\nox_audiobook' }
     $FPy = "$Root\envfast\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $FPy) -and (Test-Path -LiteralPath "$NoxHome\envfast\Scripts\python.exe")) { $FPy = "$NoxHome\envfast\Scripts\python.exe" }
     if (-not (Test-Path $FPy)) {
         Step "Создаю окружение envfast (отдельно от env — рабочее не трогается)"
         Run "$Root\env\python.exe" @("-m", "venv", "$Root\envfast")
     }
-    & $FPy -c "import torch, faster_qwen3_tts; import sys; sys.exit(0 if torch.cuda.is_available() else 1)" *> $null
+    & $FPy -c "import torch; from faster_qwen3_tts import FasterQwen3TTS" *> $null
     if ($LASTEXITCODE -ne 0) {
+        if (Test-Path -LiteralPath "$Root\work\nox_release.json") { throw "Рабочий envfast не импортирует TTS. Пакеты существующей установки не менялись; нужен вывод проверки Python." }
         Step "Ставлю пакеты в envfast: torch cu128 (~3 ГБ, может быть в кэше) + faster-qwen3-tts"
         Run $FPy @("-m", "pip", "install", "-U", "pip")
         Run $FPy @("-m", "pip", "install", "torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu128")
@@ -98,6 +106,8 @@ try {
         & $FPy -c "import torch; assert torch.cuda.is_available(), 'CUDA недоступна'; from faster_qwen3_tts import FasterQwen3TTS; import qwen_tts; print('envfast OK: torch', torch.__version__)"
         if ($LASTEXITCODE -ne 0) { throw "envfast не собрался — пришлите лог $Root\log_fast.txt" }
     } else { Write-Host "envfast уже готов — пропускаю установку" }
+    & $FPy -c "import torch; assert torch.cuda.is_available(), 'CUDA is not available; check the driver/GPU. Packages were not upgraded.'"
+    if ($LASTEXITCODE -ne 0) { throw 'CUDA недоступна; готовые записи сохранены. Проверьте драйвер и занятость видеокарты.' }
 
     # ------------------------------------------------------------- 3. воркеры
     Step ("Озвучка: " + $Workers + " быстрых воркера (CUDA-графы). Первый — здесь, лог остальных: fast_wN.log")
@@ -118,19 +128,23 @@ try {
         # все воркеры идут с начала книги: ранние части доделываются первыми (отбракованное проверкой позади —
         # каждые 15 с первым), часть собирается один раз, когда проверены все её реплики
         $wargs = $common + @("--worker", "$i")
+        $quotedWargs = @($wargs | ForEach-Object { if ($_ -match '["\r\n]') { throw "Недопустимый аргумент запуска воркера" }; '"' + $_ + '"' })
         $dir = "с начала книги"
-        $procs += Start-Process -FilePath $FPy -ArgumentList $wargs -WorkingDirectory $Root -PassThru -WindowStyle Hidden `
+        $procs += Start-Process -FilePath $FPy -ArgumentList ($quotedWargs -join " ") -WorkingDirectory $Root -PassThru -WindowStyle Hidden `
                                 -RedirectStandardOutput "$Root\fast_w$i.log" -RedirectStandardError "$Root\fast_w$i.err.log"
         Write-Host ("  воркер " + $i + " запущен (" + $dir + "), лог: " + $Root + "\fast_w" + $i + ".log")
         Start-Sleep 20
     }
     & $FPy @($common + @("--worker", "1"))
+    $firstExit = $LASTEXITCODE
 
     if ($procs.Count -gt 0) {
         Write-Host "жду остальные воркеры…"
         $procs | Wait-Process -ErrorAction SilentlyContinue
     }
 
+    $badWorkers = @($procs | Where-Object { $_.ExitCode -ne 0 })
+    if ($firstExit -ne 0 -or $badWorkers.Count -gt 0) { throw "Один или несколько воркеров завершились с ошибкой; готовые записи сохранены, подробности в fast_w*.log" }
     Step "Все воркеры завершились"
     if ($ByParts) {
         Write-Host "Работа по частям: воркеры озвучили текущую часть. Её собирает nox_part.py (ход — part.log в папке книги);"

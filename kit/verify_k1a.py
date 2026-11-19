@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 """
 verify_k1a.py — ПРОВЕРКА ДОЗАПИСАННОСТИ РАСПОЗНАВАНИЕМ РЕЧИ (Whisper на процессоре, видеокарту не занимает).
 
@@ -35,6 +35,9 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 import nox_audiobook as n  # noqa: E402
+from nox_freeze import preserve_pipeline_bundle
+from nox_file_transactions import directory_lock
+from nox_release_io import atomic_copy, atomic_write
 
 HEART = n.WORK / "asr_active.txt"
 OKV_F = n.WORK / "asr_okv.txt"
@@ -419,6 +422,8 @@ def main():
                 _win = n.work_window(rows, roles)
         except Exception as e:
             print(f"[проверка] закреплённые части/окно работы не прочитаны ({type(e).__name__}: {str(e)[:100]})", flush=True)
+            HEART.unlink(missing_ok=True)
+            raise RuntimeError("проверка остановлена: нельзя подтверждать или отбраковывать записи без достоверных закреплений") from e
         if _win is not None and _win[3]:
             print(f"[проверка] часть {_win[2]} собрана — проверять больше нечего: проверено {checked}, на переозвучку "
                   f"ушло {rejected}, под вопросом {accepted_best}" if _win[0] < len(rows) else
@@ -458,7 +463,13 @@ def main():
                         ok_cache[p.name] = sg
                         continue
                     if _okt.split("\t")[0] == sg and _carry_ok(_okt):   # v5 в силе — дописать метку v6, не слушая заново
-                        okf.write_text(_okt + OKV, encoding="utf-8")
+                        with directory_lock(ROOT / "studio" / "transactions"):
+                            current_rows = n.load_rows()
+                            if _i >= len(current_rows) or current_rows[_i] != r or _i in n.fixed_set(current_rows):
+                                continue
+                            if sig_of(p) != sg:
+                                continue
+                            atomic_write(okf, _okt + OKV)
                         ok_cache[p.name] = sg
                         continue
                 except OSError:
@@ -594,52 +605,69 @@ def main():
                         why = (why + ", " if not why.startswith("ок") else "") + f"нет паузы между предложениями ({min(_pz)} мс)"
                 why += f"\tконец {tdb:.0f} дБ" + (f", гласная {vc} мс" if vc is not None else "") \
                     + (f", голос ×{vr:.2f}" if vr is not None else "")
-                checked += 1
-                did += 1
-                stem = p.stem
-                rej = sorted(p.parent.glob(stem + ".rej*.wav"))
-                if good:
-                    _put_gaps(p, gaps)
-                    okf.write_text(f"{sg}\t{score:.3f}\t{why}\tv2{OKV}", encoding="utf-8")
-                    ok_cache[p.name] = sg
-                    for f in rej:                            # прежние неудачные попытки больше не нужны
-                        f.unlink(missing_ok=True)
-                        f.with_suffix(".json").unlink(missing_ok=True)
-                else:
-                    log(f"{r['id']}\tгл.{r['chapter']}\t{r['speaker']}\t{why}\tждали: {expected[-70:]!r}\t"
-                        f"услышано: {heard[-70:]!r}")
-                    if len(rej) + 1 >= max_tries:
-                        # попыток достаточно — берём лучшую из всех версий
-                        cand = [(score, p, gaps)]
-                        for f in rej:
-                            try:
-                                _j = json.loads(f.with_suffix(".json").read_text(encoding="utf-8"))
-                                cand.append((_j["score"], f, _j.get("gaps", [])))
-                            except Exception:
-                                cand.append((0.0, f, []))
-                        best_score, best, best_gaps = max(cand, key=lambda c: c[0])
-                        if best != p:
-                            tmp = p.with_name(stem + ".tmpbest")
-                            os.replace(best, tmp)
-                            os.replace(tmp, p)
-                        for f in list(p.parent.glob(stem + ".rej*")):
+                # A user may fix/resegment this part while Whisper runs. Check again
+                # under the same OS lock as Studio/preparation before any publication.
+                with directory_lock(ROOT / "studio" / "transactions"):
+                    current_rows = n.load_rows()
+                    if _i >= len(current_rows) or current_rows[_i] != r:
+                        continue
+                    if _i in n.fixed_set(current_rows):
+                        continue
+                    current_window = n.work_window(current_rows, n.load_roles()) if n.by_parts() else None
+                    if current_window is not None and (current_window[3] or not (current_window[0] <= _i <= current_window[1])):
+                        continue
+                    if sig_of(p) != sg or p.with_suffix('.lock').exists():
+                        continue
+                    checked += 1
+                    did += 1
+                    stem = p.stem
+                    rej = sorted(p.parent.glob(stem + ".rej*.wav"))
+                    if good:
+                        _put_gaps(p, gaps)
+                        atomic_write(okf, f"{sg}\t{score:.3f}\t{why}\tv2{OKV}")
+                        ok_cache[p.name] = sg
+                        for f in rej:                            # прежние попытки сохраняются для возврата
+                            preserve_pipeline_bundle(ROOT, f)
                             f.unlink(missing_ok=True)
-                        sg2 = sig_of(p)
-                        _put_gaps(p, best_gaps)
-                        okf.write_text(f"{sg2}\t{best_score:.3f}\tлучшая из {len(cand)} попыток\tv2{OKV}", encoding="utf-8")
-                        ok_cache[p.name] = sg2
-                        with SUSP.open("a", encoding="utf-8") as f:
-                            f.write(f"{r['id']}\tгл.{r['chapter']}\t{r['speaker']}\t{why}\t{r['text'][:90]}\n")
-                        accepted_best += 1
+                            f.with_suffix(".json").unlink(missing_ok=True)
                     else:
-                        k = len(rej) + 1
-                        dst = p.with_name(f"{stem}.rej{k}.wav")
-                        os.replace(p, dst)                   # воркер озвучки увидит «нет записи» и сделает заново
-                        dst.with_suffix(".json").write_text(json.dumps({"score": score, "why": why, "heard": heard,
-                                                                        "gaps": gaps}, ensure_ascii=False), encoding="utf-8")
-                        p.with_suffix(".gaps").unlink(missing_ok=True)
-                        side.unlink(missing_ok=True)
-                        rejected += 1
+                        log(f"{r['id']}\tгл.{r['chapter']}\t{r['speaker']}\t{why}\tждали: {expected[-70:]!r}\t"
+                            f"услышано: {heard[-70:]!r}")
+                        if len(rej) + 1 >= max_tries:
+                            # попыток достаточно — берём лучшую из всех версий
+                            cand = [(score, p, gaps)]
+                            for f in rej:
+                                try:
+                                    _j = json.loads(f.with_suffix(".json").read_text(encoding="utf-8"))
+                                    cand.append((_j["score"], f, _j.get("gaps", [])))
+                                except Exception:
+                                    cand.append((0.0, f, []))
+                            best_score, best, best_gaps = max(cand, key=lambda c: c[0])
+                            if best != p:
+                                preserve_pipeline_bundle(ROOT, p)
+                                atomic_copy(best, p)
+                            for f in rej:
+                                if f.is_file():
+                                    preserve_pipeline_bundle(ROOT, f)
+                            for f in list(p.parent.glob(stem + ".rej*")):
+                                f.unlink(missing_ok=True)
+                            sg2 = sig_of(p)
+                            _put_gaps(p, best_gaps)
+                            atomic_write(okf, f"{sg2}\t{best_score:.3f}\tлучшая из {len(cand)} попыток\tv2{OKV}")
+                            ok_cache[p.name] = sg2
+                            with SUSP.open("a", encoding="utf-8") as f:
+                                f.write(f"{r['id']}\tгл.{r['chapter']}\t{r['speaker']}\t{why}\t{r['text'][:90]}\n")
+                            accepted_best += 1
+                        else:
+                            k = len(rej) + 1
+                            dst = p.with_name(f"{stem}.rej{k}.wav")
+                            preserve_pipeline_bundle(ROOT, p)
+                            os.replace(p, dst)                   # воркер озвучки увидит «нет записи» и сделает заново
+                            dst.with_suffix(".json").write_text(json.dumps({"score": score, "why": why, "heard": heard,
+                                                                            "gaps": gaps}, ensure_ascii=False), encoding="utf-8")
+                            p.with_suffix(".gaps").unlink(missing_ok=True)
+                            side.unlink(missing_ok=True)
+                            rejected += 1
                 if checked % 50 == 0:
                     print(f"[проверка] {time.strftime('%H:%M')}  проверено {checked}, на переозвучку {rejected}, "
                           f"принято лучшее из попыток {accepted_best}; сейчас id {r['id']} (гл. {r['chapter']})", flush=True)

@@ -1,0 +1,789 @@
+{
+  "format": 1,
+  "product_version": "2026-11-18d",
+  "build_id": "2026-11-19-recovery2-public1",
+  "base_commit": "da86923760db9e90292de175d5fc5ddffe7e2129",
+  "provenance": "Rebuilt integration of audited main and archived 18c/18d intent; not the missing historical ZIP.",
+  "files": [
+    {
+      "source": ".gitattributes",
+      "sha256": "674d2bd7dba075bb1a32ef3c94869c7e5cb3c83d991db4242f5c51911448cc67",
+      "bytes": 194
+    },
+    {
+      "source": ".gitignore",
+      "sha256": "3c424493deff217adcaaf4dd4fa86b607eb12adf9f7bcb993208afe62ec6c9a6",
+      "bytes": 826
+    },
+    {
+      "source": "CHANGELOG.md",
+      "sha256": "70fb971573bbc09d4769c9a8c9a537761167d050d04853eabc3a4d47742cc21d",
+      "bytes": 8386
+    },
+    {
+      "source": "README.md",
+      "sha256": "5c80021d0262770fb0eb58a811a7d35ac9743fe64a0d311473aa7050d8357291",
+      "bytes": 24903
+    },
+    {
+      "source": "Update_NOX_18d.ps1",
+      "sha256": "fadfe5211065c01d457aa99173ac0f0279dc49f7efa6a04d96da1ee01129f093",
+      "bytes": 2488
+    },
+    {
+      "source": "base/nox_audiobook.py",
+      "sha256": "7dc909d7d4ef1919cf8f55535f9e019ca2056a038c1b2f0941a3b7d33cb04ea8",
+      "bytes": 71369
+    },
+    {
+      "source": "data/accent_dict.csv",
+      "sha256": "2c794b4292c9e0c6bd73a2e9cafe1c31da4655807383ab20a77fd8dd42ebd7fc",
+      "bytes": 20912
+    },
+    {
+      "source": "data/sreda_env.txt",
+      "sha256": "7044c4df51021b1a16949671e8e25651dc6009210e18a57db684324a9611f0dc",
+      "bytes": 1783
+    },
+    {
+      "source": "data/sreda_envfast.txt",
+      "sha256": "9006757d7781cf5f777e06ab65bcb2c9ee0178dc224a7f258107c01a50b5d299",
+      "bytes": 1904
+    },
+    {
+      "source": "data/sreda_manifest.json",
+      "sha256": "b220cff0beb2629e438e37e592810cb14b57de7a9f0b91b2809e03af21cff130",
+      "bytes": 1527
+    },
+    {
+      "source": "data/versii_env.txt",
+      "sha256": "9b3f76d139b37c4cb09f6e6bd43434e7499fa2890430d736cac0c90f101b838c",
+      "bytes": 328
+    },
+    {
+      "source": "data/versii_envfast.txt",
+      "sha256": "2463155f079d416bfe39473767f65169ad782e3b8d391eb27877d16ad8b89528",
+      "bytes": 506
+    },
+    {
+      "source": "docs/ACTUAL_STATE_ACCEPTANCE_RU.txt",
+      "sha256": "e08202fd0fba92263b83032bc31bb20f48212510cb7d7efcd9ce8d99f3ba021d",
+      "bytes": 7358
+    },
+    {
+      "source": "docs/BACKEND_TESTS_RU.txt",
+      "sha256": "b65b94dfd62bb981d62a7aa623f62e4904c941c005af04d4232895a23d38e19b",
+      "bytes": 14413
+    },
+    {
+      "source": "docs/FRONTEND_18D_VALIDATION_RU.md",
+      "sha256": "8cf0aff9b1e5bad6e7472dcf123b6fd966a0939f3cf7c284eca982b034f9b8cc",
+      "bytes": 9290
+    },
+    {
+      "source": "docs/MAINTENANCE_18D_RU.md",
+      "sha256": "c89ac70d4c8fff3c42b1a865d20123da3d53cc14d6290b7355f495dcf8bdb883",
+      "bytes": 14631
+    },
+    {
+      "source": "docs/PACKAGE_UPGRADE_RU.txt",
+      "sha256": "9762755e3bfbc9bd61d61d74a5b9914412198e6604983ad8d5b6d4bbc15b999b",
+      "bytes": 2575
+    },
+    {
+      "source": "docs/PUBLICATION_CHECKS_RU.txt",
+      "sha256": "6896843a35eb1137529b300e979b0c24848c3918adf37de8f473970fa4d44a86",
+      "bytes": 3564
+    },
+    {
+      "source": "docs/PUBLICATION_RECOVERY2_RU.md",
+      "sha256": "3540a02500649d920aac72d92900c0837cb564bc7c5a80353a1f5a43c1a3b49c",
+      "bytes": 5760
+    },
+    {
+      "source": "docs/REQUIREMENTS_18D_RU.md",
+      "sha256": "0fe4446a33a8d0bc1bda02a82f86995f7f670971482831c37d309a70264e649c",
+      "bytes": 46979
+    },
+    {
+      "source": "docs/SOURCE_COMPATIBILITY_RECOVERY2_RU.md",
+      "sha256": "f5c4fa909f19ba6df07c29dbbf279e2e1e7570346a18451d3ba25fe32aa42dfa",
+      "bytes": 9823
+    },
+    {
+      "source": "docs/TEST_RESULTS_RU.txt",
+      "sha256": "057dd444d0851cc14cbf0f69452b119786d2d4b3a09e8b00dc68ab63419d7f4e",
+      "bytes": 42748
+    },
+    {
+      "source": "kit/cleanup_k1a.ps1",
+      "sha256": "bb8cbf657e877a34dd5116e084f54f676cdcec4899f2d4dbfae033f9ed9af696",
+      "bytes": 2451
+    },
+    {
+      "source": "kit/go_kniga1a.ps1",
+      "sha256": "58b575e78ead27dd4e843e7593c74de84ef82e617d60e969c4a9cd12bf40f1d0",
+      "bytes": 67610
+    },
+    {
+      "source": "kit/nastroyki_ozvuchki.py",
+      "sha256": "fc4b9475b51c83c13bbd3e0e050c0cdd6869c603454e694d17e5d61d95714ce3",
+      "bytes": 61663
+    },
+    {
+      "source": "kit/nox_audio_archive.py",
+      "sha256": "b44fb5296e91a78d714cea28139b96ae5c795a68591875b91d92d6ec42a292e2",
+      "bytes": 8262
+    },
+    {
+      "source": "kit/nox_cues.py",
+      "sha256": "1a76ce747be766fee05306068f36ebf3f2cb88fc0f8d442499d2fc16c6c834bc",
+      "bytes": 54947
+    },
+    {
+      "source": "kit/nox_fast.py",
+      "sha256": "e73a4276135993b2dc4b50cba6d9090da08b2316d7c69f3f1fc97106bb593b83",
+      "bytes": 80915
+    },
+    {
+      "source": "kit/nox_file_transactions.py",
+      "sha256": "bfe9572d9c65068b6c47eb384ef11d98cba9388cb7ea17967ec6cbd041621bc1",
+      "bytes": 15777
+    },
+    {
+      "source": "kit/nox_freeze.py",
+      "sha256": "9dc57c4dac3fefa7ca38c36d8c3d5b389547a73200c001d8458f4f6ed396bbf2",
+      "bytes": 51423
+    },
+    {
+      "source": "kit/nox_import.py",
+      "sha256": "0c967ba8afb39e1b1f8d82dab468f4c80ebc9c6a136666b61bb3ae2c1e88ab07",
+      "bytes": 59860
+    },
+    {
+      "source": "kit/nox_maintenance.py",
+      "sha256": "edf66bf867ad886ee82a53f0189256b30b80de48e43618fc1325fb0f9bbf6ecf",
+      "bytes": 36542
+    },
+    {
+      "source": "kit/nox_part.py",
+      "sha256": "9a037e390feffee47b6f27f12b99fb5483e9ab397ca5ec321a38d77ccc752f28",
+      "bytes": 23122
+    },
+    {
+      "source": "kit/nox_release_io.py",
+      "sha256": "9c6338d778b61ece04b9c081a2d71be3bac42285198692e3991de92a90576d7c",
+      "bytes": 11366
+    },
+    {
+      "source": "kit/nox_sound_catalog.py",
+      "sha256": "bf7c4e12bc93ea8e7d84a27b1d1e431a73f31cfdd33877364a6158079e620503",
+      "bytes": 8194
+    },
+    {
+      "source": "kit/nox_status.py",
+      "sha256": "86350a9a1b7338a1e86a1f266763271a0c706a328a99f37c60eda21bf5e9dfc5",
+      "bytes": 1931
+    },
+    {
+      "source": "kit/nox_stress.py",
+      "sha256": "95281dbd97979a0687bdcf2f802f5b0df9a4d00cb2352ebe1e1ef3427d091569",
+      "bytes": 17741
+    },
+    {
+      "source": "kit/nox_studio.html",
+      "sha256": "be5563838e84be8bfbbbd059c966bcdc228698751e6fea2bd30544b24a1d4eff",
+      "bytes": 339904
+    },
+    {
+      "source": "kit/nox_studio.ps1",
+      "sha256": "4eecfc4be43959ea3889a3f003c4e3b08db3b70e4579d4defa03ffdca78babb0",
+      "bytes": 11036
+    },
+    {
+      "source": "kit/nox_studio.py",
+      "sha256": "d0fd2b8d37f4e9c4c3cbdee043fee51747cd0c5bcb46e415d50f2b4c3c59ac11",
+      "bytes": 522297
+    },
+    {
+      "source": "kit/nox_studio_18d.py",
+      "sha256": "5fb27ecd5ce5b430b60ec402f92300e4929632e616dbe58fb63cf020b175a256",
+      "bytes": 80041
+    },
+    {
+      "source": "kit/nox_update.py",
+      "sha256": "bcf940f1f1cc73ec5585a9c54fb7b9b2ab7f012648a15bdaafd9eb9d7ee778aa",
+      "bytes": 33004
+    },
+    {
+      "source": "kit/nox_voice_safety.py",
+      "sha256": "82bd25ec1f84acb61b6c731aa8bbe8f4996471849fd2932b22ee4821836f4aee",
+      "bytes": 18360
+    },
+    {
+      "source": "kit/nox_voice_tidy.py",
+      "sha256": "7f269b51fc52d8f4a8f858dabb23be10cbcd8df6a7cf425ebcbd5cdfc5e9c311",
+      "bytes": 21777
+    },
+    {
+      "source": "kit/nox_voices.py",
+      "sha256": "17043b04e77077d6de7b0ebdf53d6cc0ca109c31d011d353bcc5846850179539",
+      "bytes": 73106
+    },
+    {
+      "source": "kit/ochistka_redakcii_k1a.ps1",
+      "sha256": "58eb11a3e51cec3139f9bbec178f7bd591f467006e99dff3cb80c988f98afe9e",
+      "bytes": 2450
+    },
+    {
+      "source": "kit/prep_kniga1a.ps1",
+      "sha256": "ead82e272454ace33f31e1c478c81979264b7dc38a3dfe1560a6df705d4e383e",
+      "bytes": 197489
+    },
+    {
+      "source": "kit/razmetka_k1a.py",
+      "sha256": "1b17c66619c84976e037e94ac16de550fbde1c8bbcecc323c6ee3f3afeb98da0",
+      "bytes": 31252
+    },
+    {
+      "source": "kit/run_fast.ps1",
+      "sha256": "3b627ff068d78467ccb10a38c7770b2e4ce1d463baf76fbcd2ab89317de5c0fd",
+      "bytes": 13181
+    },
+    {
+      "source": "kit/verify_k1a.py",
+      "sha256": "2d6c428d6e2f661bcaf0b85563b284924b4864f1314fbf30f45a1c930b0aa0e1",
+      "bytes": 42616
+    },
+    {
+      "source": "kit/voicecheck_k1a.py",
+      "sha256": "08394c3c6a989dce87f22c0dcd0f5cf015bc37d791a7524b1a5dbee4b75e65c2",
+      "bytes": 9164
+    },
+    {
+      "source": "kit/voices_kniga1a.py",
+      "sha256": "d348d1dcc78f54c78d21f9f0ea30764653d9354f8b52c76d63b57f2a5f27dd05",
+      "bytes": 27928
+    },
+    {
+      "source": "kit/zvuk_k1a.py",
+      "sha256": "94b831ecdb44a1096b7fbf6c532ba6d7533c5c88eaaeb1110d0a8181793368d1",
+      "bytes": 58866
+    },
+    {
+      "source": "runtime/nox_audiobook.py",
+      "sha256": "11b62c333182af3e9e7be4714862ff821833ff1c246bc06f04dd299d8e2434a3",
+      "bytes": 158036
+    },
+    {
+      "source": "tests/PROTECTION_RECOVERY2_RESULTS.txt",
+      "sha256": "d5dc09b22364b888e5a45a4481c15b75d5cf63de3fce8c5ec69c6f97af818457",
+      "bytes": 11655
+    },
+    {
+      "source": "tests/PROTECTION_RESULTS.txt",
+      "sha256": "d6bcc565a55bdcccb5263ff44cc58c3cee258501dcb0235f3362e9819ffa7651",
+      "bytes": 10321
+    },
+    {
+      "source": "tests/backend_integration.py",
+      "sha256": "b0550e9cf2aa2829364e0cf094c21cc2e13367a40021762e4a0790d57f38bf94",
+      "bytes": 26428
+    },
+    {
+      "source": "tests/backend_studio.py",
+      "sha256": "114c796d2f223ed54b0897b887f4c3dacb5b75fd4eb3391eeb737a4cd6bcd358",
+      "bytes": 12427
+    },
+    {
+      "source": "tests/backend_transactions.py",
+      "sha256": "ecd597c8abd52bef24e28fa970a1cb847f137849e8d26a17206146e9feb4ebd1",
+      "bytes": 5771
+    },
+    {
+      "source": "tests/backend_voice_tidy.py",
+      "sha256": "8390ee8e3e24ef27d171c2b3720a0e6048c0ad0ecdb97f6d0e5b54dcbd2433f9",
+      "bytes": 11206
+    },
+    {
+      "source": "tests/frontend_contracts.cjs",
+      "sha256": "5819525e96ae32e518db39221199e6f3c91dadd3b70ea22df5d822ee9adc4096",
+      "bytes": 18637
+    },
+    {
+      "source": "tests/frontend_ui.cjs",
+      "sha256": "23e9b3a6078383ed7b92048c1422a00411c1c25e838d86756f7ac795bfa6aa33",
+      "bytes": 16247
+    },
+    {
+      "source": "tests/installer_archive_verifier.py",
+      "sha256": "f25e1fcaa5a7958808a639c44f24d2e79036fa2b1ac37b6bdf6aeb4b5058e05e",
+      "bytes": 8503
+    },
+    {
+      "source": "tests/installer_export_integration.py",
+      "sha256": "f4d6f116153571544124b90eb7fa0a50466222c6521a24301510d56aeb2465ba",
+      "bytes": 11204
+    },
+    {
+      "source": "tests/installer_final_integration.py",
+      "sha256": "bab376ccc0b1290bb50c0eff023172aed175127b972fe1994cba991c2968c9cc",
+      "bytes": 4218
+    },
+    {
+      "source": "tests/installer_preflight_compatibility.py",
+      "sha256": "6d6725ab68ea727ee692855726dffdd3fadef3a49a43be8a9ede395205f59f1b",
+      "bytes": 3404
+    },
+    {
+      "source": "tests/installer_release_safety.py",
+      "sha256": "ba0d760b8ff3896f2dc07941a31f15356f8614b8480aaa9e55bfed86b65b2b8f",
+      "bytes": 15056
+    },
+    {
+      "source": "tests/main_baseline.json",
+      "sha256": "9caa1f8826c1f63ccd04d05b24e709e1fb2ede441f9fb9e0cfb7a7f901761a85",
+      "bytes": 4722
+    },
+    {
+      "source": "tests/maintenance_safety.py",
+      "sha256": "a2220a7bf20a702f707ac59afec3e88cd64abcb2e73b6a997387a84a82944728",
+      "bytes": 25323
+    },
+    {
+      "source": "tests/package_upgrade.py",
+      "sha256": "f07cb02f277c6bf83366d38c0d858a0c35281b0bb2ba9524a8b51e5601c9a492",
+      "bytes": 16084
+    },
+    {
+      "source": "tests/protection_legacy_parts.py",
+      "sha256": "ffed91543f36e41a87ab182fa491f0a19797907ad3c603360a18c6184594179e",
+      "bytes": 10653
+    },
+    {
+      "source": "tests/protection_regressions.py",
+      "sha256": "26be439c0346f42a9657f6dad69c8a4cd3bd7a3a335f92d74ce86e08161295ad",
+      "bytes": 40328
+    },
+    {
+      "source": "tests/protection_voice_and_publish.py",
+      "sha256": "433879f79eb2aa02313ab5f9c990f8b05da67f82fb4683aa3912ad89714715ab",
+      "bytes": 11731
+    },
+    {
+      "source": "tests/publishing_safety.py",
+      "sha256": "1e0597d2a633dcb50cbb47646fb1bd17c82bb0f7250866c80342ebed1372d47f",
+      "bytes": 9802
+    },
+    {
+      "source": "tools/build_release.py",
+      "sha256": "576af443f8e6f1a1eb39dfaefb7819b867e540f4149024f439004992d5f94c66",
+      "bytes": 6243
+    },
+    {
+      "source": "tools/nox_bundle_tools.py",
+      "sha256": "54b0e7fd9f9d57d84ad1ca5fbe86de5d8f5ba24e3462ea472f8abf964d4dc170",
+      "bytes": 18352
+    },
+    {
+      "source": "tools/sborshchik_k1a.ps1",
+      "sha256": "f073bdd7f4bbff1906d77271bc90a6b9c58cd4076e66879529a76e9cd81b1ce9",
+      "bytes": 4782
+    },
+    {
+      "source": "tools/ustanovka_s_nulya.ps1",
+      "sha256": "04ed703870a5346f256f796e09bd327a07e8a6ae361ca23790adebd10e13e026",
+      "bytes": 22688
+    },
+    {
+      "source": "tools/v_github.ps1",
+      "sha256": "1d8727ed6211dbe15d04c94f9451c38dd1cf6b833bd413fb84ef98c324859008",
+      "bytes": 4418
+    },
+    {
+      "source": "tools/validate_release.py",
+      "sha256": "a2a2f105718f436a4342c9a2938511baeb5b00adfc5a4ae40c5d3001ac158fa1",
+      "bytes": 5097
+    },
+    {
+      "source": "tools/verified_legacy_sources.json",
+      "sha256": "b31c86749aac3df9991d6edc4df138b30dff95aa05d794c62fa25d8c8cb489f4",
+      "bytes": 1537
+    }
+  ],
+  "targets": [
+    {
+      "source": "kit/nox_audio_archive.py",
+      "scope": "app",
+      "path": "nox_audio_archive.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_cues.py",
+      "scope": "app",
+      "path": "nox_cues.py",
+      "known_previous": [
+        "35d9e7e2a710781b6a39cb0592f5526ed38940a9cec900713b52df778f49d998"
+      ]
+    },
+    {
+      "source": "kit/nox_file_transactions.py",
+      "scope": "app",
+      "path": "nox_file_transactions.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_freeze.py",
+      "scope": "app",
+      "path": "nox_freeze.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_import.py",
+      "scope": "app",
+      "path": "nox_import.py",
+      "known_previous": [
+        "0697d32beb0e67eac0156f03cbba6484397d5e9ca5ae4040f7cf045be80c3a5e"
+      ]
+    },
+    {
+      "source": "kit/nox_release_io.py",
+      "scope": "app",
+      "path": "nox_release_io.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_sound_catalog.py",
+      "scope": "app",
+      "path": "nox_sound_catalog.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_studio.html",
+      "scope": "app",
+      "path": "nox_studio.html",
+      "known_previous": [
+        "d5a11a52077ffbd9dc221edfa95334187bf6aeef3a74a770b7f5742ee4c7d982"
+      ]
+    },
+    {
+      "source": "kit/nox_studio.ps1",
+      "scope": "app",
+      "path": "nox_studio.ps1",
+      "known_previous": [
+        "8beb6a3daebd7c006396576e3fef8ff0e2e67abd6922c427d62542f0734a26c6"
+      ]
+    },
+    {
+      "source": "kit/nox_studio.py",
+      "scope": "app",
+      "path": "nox_studio.py",
+      "known_previous": [
+        "2f75d70b6b7493bcdfb3fd454429d52f5b364d46fa2708d7f5b5b5b4c9040f70",
+        "f42e448261a831115f140b17c4905291f1658a4e9a9ef6569a140b055aa5dc03"
+      ]
+    },
+    {
+      "source": "kit/nox_studio_18d.py",
+      "scope": "app",
+      "path": "nox_studio_18d.py",
+      "known_previous": [
+        "1fc857f901736685b0f99c1c53870e2bada9f8d6fc3663c42c40881840af7e02"
+      ]
+    },
+    {
+      "source": "kit/nox_update.py",
+      "scope": "app",
+      "path": "nox_update.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/cleanup_k1a.ps1",
+      "scope": "book",
+      "path": "cleanup_k1a.ps1",
+      "known_previous": [
+        "b5a36289f83fa713ce94f1dba2d82243cbc6444f13edc60899174efdf7cde592"
+      ]
+    },
+    {
+      "source": "kit/cleanup_k1a.ps1",
+      "scope": "downloads",
+      "path": "cleanup_k1a.ps1",
+      "known_previous": [
+        "b5a36289f83fa713ce94f1dba2d82243cbc6444f13edc60899174efdf7cde592"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "kit/go_kniga1a.ps1",
+      "scope": "book",
+      "path": "go_kniga1a.ps1",
+      "known_previous": [
+        "41ff8d8117ca07dc5eabc1f1f8cd51da63cd6266b05941510aaacefcd8eed5fa"
+      ]
+    },
+    {
+      "source": "kit/go_kniga1a.ps1",
+      "scope": "downloads",
+      "path": "go_kniga1a.ps1",
+      "known_previous": [
+        "41ff8d8117ca07dc5eabc1f1f8cd51da63cd6266b05941510aaacefcd8eed5fa"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "kit/nastroyki_ozvuchki.py",
+      "scope": "book",
+      "path": "nastroyki_ozvuchki.py",
+      "known_previous": [
+        "33571aac3f7c9d39e74d201a56179483c68eeaeea795902447d551e22164664c"
+      ]
+    },
+    {
+      "source": "kit/nox_audio_archive.py",
+      "scope": "book",
+      "path": "nox_audio_archive.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_fast.py",
+      "scope": "book",
+      "path": "nox_fast.py",
+      "known_previous": [
+        "0d6e55eb410f15b2f569a2c6434b296b462513c8baeba38f4ff1e5dd9d2c8cca"
+      ]
+    },
+    {
+      "source": "kit/nox_file_transactions.py",
+      "scope": "book",
+      "path": "nox_file_transactions.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_freeze.py",
+      "scope": "book",
+      "path": "nox_freeze.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_maintenance.py",
+      "scope": "book",
+      "path": "nox_maintenance.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_part.py",
+      "scope": "book",
+      "path": "nox_part.py",
+      "known_previous": [
+        "42cf54ad5d8934487332f31cd729a33341e462f331610ee2edc4a65bef2cb669"
+      ]
+    },
+    {
+      "source": "kit/nox_release_io.py",
+      "scope": "book",
+      "path": "nox_release_io.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_sound_catalog.py",
+      "scope": "book",
+      "path": "nox_sound_catalog.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_status.py",
+      "scope": "book",
+      "path": "nox_status.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_stress.py",
+      "scope": "book",
+      "path": "nox_stress.py",
+      "known_previous": [
+        "ef9cc446614afe63f0e02c5e32a1ad586c20de2085daf7814106cf2b6df241ce"
+      ]
+    },
+    {
+      "source": "kit/nox_studio.ps1",
+      "scope": "book",
+      "path": "nox_studio.ps1",
+      "known_previous": [
+        "8beb6a3daebd7c006396576e3fef8ff0e2e67abd6922c427d62542f0734a26c6"
+      ]
+    },
+    {
+      "source": "kit/nox_studio.ps1",
+      "scope": "downloads",
+      "path": "nox_studio.ps1",
+      "known_previous": [
+        "8beb6a3daebd7c006396576e3fef8ff0e2e67abd6922c427d62542f0734a26c6"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "kit/nox_update.py",
+      "scope": "book",
+      "path": "nox_update.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_voice_safety.py",
+      "scope": "book",
+      "path": "nox_voice_safety.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_voice_tidy.py",
+      "scope": "book",
+      "path": "nox_voice_tidy.py",
+      "known_previous": []
+    },
+    {
+      "source": "kit/nox_voices.py",
+      "scope": "book",
+      "path": "nox_voices.py",
+      "known_previous": [
+        "3309043aa08eeefbc64a5e23a303986db4a6a0a13d594ca50dfe30b856e00cbf"
+      ]
+    },
+    {
+      "source": "kit/ochistka_redakcii_k1a.ps1",
+      "scope": "book",
+      "path": "ochistka_redakcii_k1a.ps1",
+      "known_previous": [
+        "b072fbd152046bbded3b64762c8ab676c3615aef9e187b71f73307e7583d5e1b"
+      ]
+    },
+    {
+      "source": "kit/ochistka_redakcii_k1a.ps1",
+      "scope": "downloads",
+      "path": "ochistka_redakcii_k1a.ps1",
+      "known_previous": [
+        "b072fbd152046bbded3b64762c8ab676c3615aef9e187b71f73307e7583d5e1b"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "kit/prep_kniga1a.ps1",
+      "scope": "book",
+      "path": "prep_kniga1a.ps1",
+      "known_previous": [
+        "a31aa87dd00339b6f9446fb133e1cc3b1726986074aa355fc7205529652f3da5"
+      ]
+    },
+    {
+      "source": "kit/prep_kniga1a.ps1",
+      "scope": "downloads",
+      "path": "prep_kniga1a.ps1",
+      "known_previous": [
+        "a31aa87dd00339b6f9446fb133e1cc3b1726986074aa355fc7205529652f3da5"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "kit/razmetka_k1a.py",
+      "scope": "book",
+      "path": "razmetka_k1a.py",
+      "known_previous": [
+        "943ac6b40c7287aec6509fc47c78138adce0c2175c9e700dc3cf7a441e09f1a7"
+      ]
+    },
+    {
+      "source": "kit/run_fast.ps1",
+      "scope": "book",
+      "path": "run_fast.ps1",
+      "known_previous": [
+        "aedaebae237d59c6a0763b627e7698a1c8fcba29b05c97b1a617bff16dd66952"
+      ]
+    },
+    {
+      "source": "kit/run_fast.ps1",
+      "scope": "downloads",
+      "path": "run_fast.ps1",
+      "known_previous": [
+        "aedaebae237d59c6a0763b627e7698a1c8fcba29b05c97b1a617bff16dd66952"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "kit/verify_k1a.py",
+      "scope": "book",
+      "path": "verify_k1a.py",
+      "known_previous": [
+        "06a81bdbc742a3f3267c985c7e35f7460a6e02d8f297cc27041247a8696cb38c"
+      ]
+    },
+    {
+      "source": "kit/voicecheck_k1a.py",
+      "scope": "book",
+      "path": "voicecheck_k1a.py",
+      "known_previous": [
+        "835ea93db7bd6b6ed3077939fd5ab22c3c5bb736510c72ad15d2d8e0347ff805"
+      ]
+    },
+    {
+      "source": "kit/voices_kniga1a.py",
+      "scope": "book",
+      "path": "voices_kniga1a.py",
+      "known_previous": [
+        "15dc4121a3f673f6b80bb3127b5cd6f4e19cd1ad46663ce3363069d9640d88a2"
+      ]
+    },
+    {
+      "source": "kit/zvuk_k1a.py",
+      "scope": "book",
+      "path": "zvuk_k1a.py",
+      "known_previous": [
+        "b230b43f82d020fd51c5b364661ef159acc6bd6bdcb309759f00880039bd094f"
+      ]
+    },
+    {
+      "source": "runtime/nox_audiobook.py",
+      "scope": "book",
+      "path": "nox_audiobook.py",
+      "known_previous": [
+        "01dd06d301305d723351d76640ba82444be6142d38194424cc821f6c7018c600",
+        "4a92726cbf258e67ad1eb99af260c95047560900d049f6a47fd847e91f584b39"
+      ]
+    },
+    {
+      "source": "base/nox_audiobook.py",
+      "scope": "home",
+      "path": "nox_audiobook.py",
+      "known_previous": [
+        "2f8508ad7a822eea553e401132f76636479eba9070d121fd70f67abee960c7f0",
+        "4a92726cbf258e67ad1eb99af260c95047560900d049f6a47fd847e91f584b39"
+      ]
+    },
+    {
+      "source": "kit/nox_fast.py",
+      "scope": "home",
+      "path": "nox_fast.py",
+      "known_previous": [
+        "0d6e55eb410f15b2f569a2c6434b296b462513c8baeba38f4ff1e5dd9d2c8cca",
+        "ea467de689b7a3f5dfe0a0a85e012fe48f860bba42f0eae8a422cc2cb21bcaf1"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "tools/sborshchik_k1a.ps1",
+      "scope": "downloads",
+      "path": "sborshchik_k1a.ps1",
+      "known_previous": [
+        "2dea487edb7196ae496cc96680b18a9434cebc6d354027369053dbdf936d3b82"
+      ],
+      "existing_only": true
+    },
+    {
+      "source": "tools/v_github.ps1",
+      "scope": "downloads",
+      "path": "v_github.ps1",
+      "known_previous": [
+        "0a19132b89da7d89aaa75bd36dcfe5a7dbb75f4bd8ee442b4d86ccdd7081d9d2"
+      ],
+      "existing_only": true
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+Сквозная проверка сборочного кандидата NOX 18d recovery2
+Публичная копия протокола: два абсолютных пути среды заменены обозначениями; результаты и хеши сохранены.
+Этот внутренний протокол относится к ZIP-кандидату до включения итоговых отчётов.
+Код и тесты после этой проверки не менялись. Окончательный доставляемый ZIP
+проверяется повторно; его SHA-256 и результат приведены во внешнем протоколе
+TEST_RESULTS_18d_recovery2_RU.txt рядом с архивом.
+
+UTC: 2026-11-19T15:00:46.664077+00:00
+Baseline: verified main snapshot da86923760db9e90292de175d5fc5ddffe7e2129
+Legacy runtime SHA256: 01dd06d301305d723351d76640ba82444be6142d38194424cc821f6c7018c600
+Package: recovery2 candidate / NOX_18d_recovery2_2026-11-19.zip
+Package ZIP SHA256: 53923712e29819caa247c642f946f18368a29455ef783ba9a24fd51bfbaf5528
+PASS: actual-main upgrade, 32 old destinations / 49 planned destinations; all four scopes; verify_installed(all); book/audio byte-exact; rollback exact original code+metadata.
+PASS: unknown actual-main source rejected before replacement; diagnostics includes source+CSV+locks, excludes all audio/takes/models/environments (42 entries).
+
+test_real_main_upgrade_verify_and_byte_exact_rollback (__main__.PackageUpgrade.test_real_main_upgrade_verify_and_byte_exact_rollback) ... ok
+test_unknown_old_code_stops_and_diagnostic_zip_excludes_audio (__main__.PackageUpgrade.test_unknown_old_code_stops_and_diagnostic_zip_excludes_audio) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.314s
+
+OK
+
+Пределы: реальные API из проверяемого ZIP, настоящий pinned main и старый сгенерированный runtime.
+Данные книги — отдельная синтетическая двухстрочная фикстура по реальной схеме main; PCM WAV валидны.
+Ни CUDA/TTS, ни Windows CLI gate, CIM/процессы Windows или фактическая пользовательская книга здесь не проверяются.
+Тест не изменяет хеши known_previous и не подменяет поддержку старой версии. Без исторических входных файлов — SKIP.

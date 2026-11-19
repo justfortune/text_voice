@@ -1,0 +1,113 @@
+NOX 18d protection regression protocol
+2026-11-19 UTC
+Generated Stage 21 + NOX_PROTECTION_VERSION=18d
+Generated runtime SHA256: 11b62c333182af3e9e7be4714862ff821833ff1c246bc06f04dd299d8e2434a3
+Syntax checked: kit/nox_freeze.py, kit/nox_voice_safety.py, kit/nox_fast.py, kit/nox_part.py, kit/voices_kniga1a.py, kit/nastroyki_ozvuchki.py, kit/voicecheck_k1a.py, tests/generated_runtime/nox_audiobook.py
+
+COMMAND: /opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python tests/protection_regressions.py
+EXIT: 0
+защита редакции: сохранено 1 исходных реплик; снимок /tmp/tmpkk3lie48/work/freeze_backups/20261119-165253_2b912f105979
+watch: настройки сборки изменились; незакреплённые части будут собраны заново. Прежние аудиофайлы, копии на Диске и версии со звуками сохранены до успешной замены.
+[test] загружаю модель и снимаю CUDA-графы (~1 мин)…
+[test] загружаю модель и снимаю CUDA-графы (~1 мин)…
+[test] модель и графы готовы за 0 с
+
+test_active_tail_cue_cannot_be_rebound_to_equal_text_elsewhere (__main__.Contracts.test_active_tail_cue_cannot_be_rebound_to_equal_text_elsewhere) ... ok
+test_broken_join_rejected (__main__.Contracts.test_broken_join_rejected) ... ok
+test_conflicting_real_last_is_not_accepted (__main__.Contracts.test_conflicting_real_last_is_not_accepted) ... ok
+test_individual_lock_without_fixed_part_is_protected (__main__.Contracts.test_individual_lock_without_fixed_part_is_protected) ... ok
+test_inserted_identical_paragraph_is_ambiguous (__main__.Contracts.test_inserted_identical_paragraph_is_ambiguous) ... ok
+test_insertion_only_part_is_reported_without_numeric_guessing (__main__.Contracts.test_insertion_only_part_is_reported_without_numeric_guessing) ... ok
+test_locked_part_requires_its_insertions_to_be_locked_too (__main__.Contracts.test_locked_part_requires_its_insertions_to_be_locked_too) ... ok
+test_locked_studio_insertions_before_and_after_pipeline_rows (__main__.Contracts.test_locked_studio_insertions_before_and_after_pipeline_rows) ... ok
+test_missing_last_does_not_fall_back_to_last_p_or_last_i (__main__.Contracts.test_missing_last_does_not_fall_back_to_last_p_or_last_i) ... ok
+test_missing_or_malformed_fixed_document_never_means_empty (__main__.Contracts.test_missing_or_malformed_fixed_document_never_means_empty) ... ok
+test_non_prefix_locked_parts_are_valid_main_contract (__main__.Contracts.test_non_prefix_locked_parts_are_valid_main_contract) ... ok
+test_overlapping_fixed_ranges_rejected (__main__.Contracts.test_overlapping_fixed_ranges_rejected) ... ok
+test_paragraph_number_shift_is_safe_content_change_is_not (__main__.Contracts.test_paragraph_number_shift_is_safe_content_change_is_not) ... ok
+test_partial_paragraph_is_retained_as_whole (__main__.Contracts.test_partial_paragraph_is_retained_as_whole) ... ok
+test_real_main_schema_and_joined_children (__main__.Contracts.test_real_main_schema_and_joined_children) ... ok
+test_truthy_corrupt_lock_rejected (__main__.Contracts.test_truthy_corrupt_lock_rejected) ... ok
+test_unanchored_insertion_cannot_use_numeric_fallback (__main__.Contracts.test_unanchored_insertion_cannot_use_numeric_fallback) ... ok
+test_unchanged_repeated_paragraphs_remain_compatible (__main__.Contracts.test_unchanged_repeated_paragraphs_remain_compatible) ... ok
+test_audio_change_during_prepare_cancels (__main__.FilesystemTransactions.test_audio_change_during_prepare_cancels) ... ok
+test_checked_backup_and_atomic_publication_keep_audio (__main__.FilesystemTransactions.test_checked_backup_and_atomic_publication_keep_audio) ... ok
+test_concurrent_edits_change_cancels_csv_publication (__main__.FilesystemTransactions.test_concurrent_edits_change_cancels_csv_publication) ... ok
+test_corrupt_json_blocks_before_changes (__main__.FilesystemTransactions.test_corrupt_json_blocks_before_changes) ... ok
+test_explicit_recovery_of_failed_rollback_checks_hashes (__main__.FilesystemTransactions.test_explicit_recovery_of_failed_rollback_checks_hashes) ... ok
+test_missing_audio_sidecar_is_detected (__main__.FilesystemTransactions.test_missing_audio_sidecar_is_detected) ... ok
+test_partial_publish_rolls_back_roles_manuscript_and_csv (__main__.FilesystemTransactions.test_partial_publish_rolls_back_roles_manuscript_and_csv) ... ok
+test_preparation_excludes_studio_transactions (__main__.FilesystemTransactions.test_preparation_excludes_studio_transactions) ... ok
+test_read_protection_is_read_only (__main__.FilesystemTransactions.test_read_protection_is_read_only) ... ok
+test_retained_pipeline_bundle_keeps_both_sidecar_revisions (__main__.FilesystemTransactions.test_retained_pipeline_bundle_keeps_both_sidecar_revisions) ... ok
+test_stale_preparation_marker_is_not_silently_removed (__main__.FilesystemTransactions.test_stale_preparation_marker_is_not_silently_removed) ... ok
+test_assembly_invalidation_keeps_all_audio_and_nonprefix_fixed (__main__.PipelineIntegration.test_assembly_invalidation_keeps_all_audio_and_nonprefix_fixed) ... ok
+test_generated_stage21_preserves_real_fixed_contract (__main__.PipelineIntegration.test_generated_stage21_preserves_real_fixed_contract) ... ok
+test_historical_a534_chunk_order_and_extreme_limits (__main__.PipelineIntegration.test_historical_a534_chunk_order_and_extreme_limits) ... ok
+test_part_sync_never_rewrites_broken_boundary (__main__.PipelineIntegration.test_part_sync_never_rewrites_broken_boundary) ... ok
+test_real_segment_cli_retains_prefix_and_rolls_back_changed_manuscript (__main__.PipelineIntegration.test_real_segment_cli_retains_prefix_and_rolls_back_changed_manuscript) ... ok
+test_runtime_catalog_uses_exact_mapping_and_retained_audio (__main__.PipelineIntegration.test_runtime_catalog_uses_exact_mapping_and_retained_audio) ... ok
+test_status_and_report_leave_every_book_file_unchanged (__main__.PipelineIntegration.test_status_and_report_leave_every_book_file_unchanged) ... ok
+test_csv_change_stops_before_claim (__main__.WorkerOwnership.test_csv_change_stops_before_claim) ... ok
+test_part_closes_during_generation_without_publication (__main__.WorkerOwnership.test_part_closes_during_generation_without_publication) ... ok
+test_ready_heartbeat_is_absent_until_successful_warmup (__main__.WorkerOwnership.test_ready_heartbeat_is_absent_until_successful_warmup) ... ok
+test_window_shrinks_after_claim_without_synth_or_write (__main__.WorkerOwnership.test_window_shrinks_after_claim_without_synth_or_write) ... ok
+
+----------------------------------------------------------------------
+Ran 40 tests in 1.041s
+
+OK
+
+
+COMMAND: /opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python tests/protection_voice_and_publish.py
+EXIT: 0
+
+test_real_builder_skips_nonprefix_fixed_and_rechecks_before_publish (__main__.Publication.test_real_builder_skips_nonprefix_fixed_and_rechecks_before_publish) ... ok
+test_actual_cast_keeps_fixed_role_but_recasts_requested_unlocked (__main__.RealVoiceScripts.test_actual_cast_keeps_fixed_role_but_recasts_requested_unlocked) ... ok
+test_actual_excel_roles_ignores_frozen_changes_and_applies_unlocked (__main__.RealVoiceScripts.test_actual_excel_roles_ignores_frozen_changes_and_applies_unlocked) ... ok
+test_actual_voicecheck_force_never_replaces_locked_voice (__main__.RealVoiceScripts.test_actual_voicecheck_force_never_replaces_locked_voice) ... ok
+test_explicit_recovery_after_interrupted_voice_operation (__main__.RealVoiceScripts.test_explicit_recovery_after_interrupted_voice_operation) ... ok
+test_locked_alias_and_same_as_target_survive_cast_pruning (__main__.RealVoiceScripts.test_locked_alias_and_same_as_target_survive_cast_pruning) ... ok
+test_operation_failure_restores_roles_samples_and_pipeline_bundle (__main__.RealVoiceScripts.test_operation_failure_restores_roles_samples_and_pipeline_bundle) ... ok
+test_voicecheck_dry_does_not_write_reports_or_assets (__main__.RealVoiceScripts.test_voicecheck_dry_does_not_write_reports_or_assets) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.803s
+
+OK
+
+
+Limits: Linux execution. Real generated segment CLI, maintenance script entry points,
+assembly publication logic and mocked worker inference exercised. No CUDA model, real book
+audio decode/quality, Windows PowerShell or real Windows locked-file behaviour exercised.
+Insertion-only parts with no proven CSV boundary are explicitly refused; ordinary inserted
+rows/joins/non-prefix fixed parts are supported. No unproven numeric/fuzzy reanchoring.
+
+FINAL TARGETED SAFETY RUN — 2026-11-19
+Total protection/voice tests after Windows PID correction: 54 passed (46 + 8).
+Commands completed successfully:
+  python tests/protection_regressions.py          46 / 46 OK
+  python tests/protection_voice_and_publish.py     8 / 8 OK
+  python tests/backend_voice_tidy.py              8 / 8 OK (separate backend suite)
+
+Six added ProcessLiveness regressions:
+  windows_running_and_exited_process_only_query_information: PASS
+  windows_missing_pid_is_distinguished_from_access_denied: PASS
+  windows_query_or_close_failure_keeps_recovery_blocked: PASS
+  windows_unavailable_api_never_falls_back_to_kill: PASS
+  invalid_pid_is_rejected_before_any_native_call: PASS
+  posix_keeps_signal_zero_probe_with_fail_closed_errors: PASS
+
+Windows code uses OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION=0x1000),
+GetExitCodeProcess and CloseHandle. Mock assertions forbid os.kill and
+TerminateProcess, verify a 64-bit handle, access flags and handle closure.
+PID must be an integer excluding bool, positive, within the platform PID range.
+Unknown/access-denied/query/close errors leave recovery blocked.
+IMPORTANT: These are mocked WinAPI tests executed on Linux, not a Windows run.
+
+Primary API references consulted:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocess
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess
+https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights
+
+Final nox_freeze.py SHA256: 80bd5fe69da5ebc6ef745ecc9bc6501e6f7e82f15847c62b2dc5366428fa8486

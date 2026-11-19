@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 """
 nox_part.py — СБОРКА ТЕКУЩЕЙ ЧАСТИ в режиме «по частям».
 
@@ -70,9 +70,14 @@ def audit_window(n, rows, roles, w, accent) -> int:
     прочитанном тексте или файл не читается. Закреплённые части и всё, что дальше текущей, не просматриваются."""
     cache = n.load_durations()
     seen, drop = set(), []
-    for r in rows[w[0]:w[1] + 1]:
+    protected = n.fixed_set(rows)
+    protected_audio = {n.wav_for(rows[i], roles) for i in protected}
+    for index in range(w[0], w[1] + 1):
+        if index in protected:
+            continue
+        r = rows[index]
         p = n.wav_for(r, roles)
-        if p.name in seen or not p.exists():
+        if p in protected_audio or p.name in seen or not p.exists():
             continue
         seen.add(p.name)
         side, why = p.with_suffix(".txt"), None
@@ -99,6 +104,13 @@ def audit_window(n, rows, roles, w, accent) -> int:
                 why = "файл записи не читается"
         if why and n.claim(p):
             try:
+                current = n.work_window(rows, roles)
+                latest_fixed = n.fixed_set(rows)
+                if (index in latest_fixed or p in {n.wav_for(rows[i], roles) for i in latest_fixed}
+                        or current[3] or not current[0] <= index <= current[1]):
+                    continue
+                from nox_freeze import preserve_pipeline_bundle
+                preserve_pipeline_bundle(n.HERE, p)
                 for f in [p, side] + [p.with_suffix(x) for x in (".ok", ".meta", ".gaps")] + list(p.parent.glob(p.stem + ".rej*")):
                     try:
                         f.unlink()
@@ -119,44 +131,14 @@ def audit_window(n, rows, roles, w, accent) -> int:
 
 
 def sync_fixed(n):
-    """Список закреплённых частей (studio\\fixed_parts.json) сверяется с правками студии (studio\\edits.json) — они первичны.
-    Нужен, когда студия прежней версии закрепляла части, не сообщая конвейеру, и когда рукопись переразбита, а студия
-    с тех пор не запускалась (границы частей ищутся по меткам реплик). Расчёт — тот же, что у студии."""
-    f = n.FIXED_PATH
-    ed = f.parent / "edits.json"
-    if not ed.exists():
-        return
-    try:
-        st = json.loads(ed.read_text(encoding="utf-8"))
-        rows = n.load_rows()
-        uids = n.row_uids(rows)
-        pos = {u: i for i, u in enumerate(uids)}
-        out, start = [], 0
-        for k, p in enumerate(st.get("parts") or [], 1):
-            if start >= len(rows):
-                break
-            b = pos.get(p.get("last"))
-            if b is None or b < start:                   # last_p — номер реплики у конвейера (last_i считан с вставками студии)
-                lp = p.get("last_p") if isinstance(p.get("last_p"), int) else p.get("last_i", start)
-                b = min(max(int(lp or start), start), len(rows) - 1)
-            if p.get("locked"):
-                out.append(dict(n=k, a=start, b=b, a_uid=uids[start], b_uid=uids[b]))
-            start = b + 1
-        try:
-            old = json.loads(f.read_text(encoding="utf-8")).get("parts")
-        except Exception:
-            old = None
-        if old == out:
-            return
-        f.parent.mkdir(exist_ok=True)
-        tmp = f.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"ver": 1, "parts": out, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": "nox_part"},
-                                  ensure_ascii=False), encoding="utf-8")
-        replace_retry(tmp, f)
-        print(f"  закреплённые в студии части: {len(out)} — список для конвейера обновлён по правкам студии", flush=True)
-    except Exception as e:
-        print(f"  правки студии не прочитаны ({type(e).__name__}: {str(e)[:120]}) — список закреплённых частей оставлен как есть",
-              flush=True)
+    """Validate both protection sources; never reconstruct a boundary by number.
+
+    The previous implementation silently rewrote fixed_parts from last_p when
+    a last UID had disappeared. Repairs now need an explicit Studio operation
+    with its transaction journal, not a pipeline startup or a status command.
+    """
+    from nox_freeze import read_protection
+    return read_protection(n.HERE, n.load_rows())
 
 
 def report(n, minutes: float) -> int:
@@ -171,7 +153,7 @@ def report(n, minutes: float) -> int:
     print(f"Книга: реплик {len(rows)}. Закреплено частей: {len(fx)}"
           + (f" (реплики № {rows[fx[0][0]]['id']}–{rows[fx[-1][1]]['id']})" if fx else "") + f" — {100 * done_l / all_l:.0f} % текста.")
     if len(fxs) > sum(b - a + 1 for a, b in fx):
-        print("  Есть закреплённые части не подряд (перед ними — незакреплённая): конвейер вернётся к первой незакреплённой.")
+        print("  Есть отдельные закреплённые фразы или части вне непрерывного префикса: они также защищены.")
     if w[0] >= len(rows):
         print("Все части закреплены — книга готова.")
         return 0
@@ -221,6 +203,8 @@ def main() -> int:
     a = ap.parse_args()
 
     root = Path(a.root).resolve()
+    if a.status or a.report:
+        sys.dont_write_bytecode = True
     os.chdir(root)
     sys.path.insert(0, str(root))
     try:
@@ -228,9 +212,10 @@ def main() -> int:
     except Exception as e:
         print(f"не загрузился конвейер книги ({root}\\nox_audiobook.py): {type(e).__name__}: {e}", flush=True)
         return 3
-    if int(getattr(n, "NOX_STAGE", 0) or 0) < 21 or not hasattr(n, "work_window"):
+    if (int(getattr(n, "NOX_STAGE", 0) or 0) < 21 or not hasattr(n, "work_window")
+            or getattr(n, "NOX_PROTECTION_VERSION", None) != "18d"):
         print(f"конвейер в папке книги — этап {getattr(n, 'NOX_STAGE', '?')}, а работа по частям появилась на этапе 21: "
-              "скачайте новый prep_kniga1a.ps1 и запустите go", flush=True)
+              "для защиты редакции требуется конвейер из полного комплекта 18d; примените его установщик", flush=True)
         return 3
     st = getattr(n, "SETTINGS", None) or {}
 
@@ -264,8 +249,13 @@ def main() -> int:
         chk = sum(1 for r in seg if n._seg_ok(r, roles, True)) if gate else None
         return have, chk, len(seg)
 
-    if not a.status:
+    # Both status forms only read: no fixed-parts synchronization, mode write,
+    # directory creation or audio auditing is performed on this path.
+    try:
         sync_fixed(n)
+    except Exception as exc:
+        print(f"Защита редакции: {exc}. Работа остановлена; файлы закреплений не изменены.", file=sys.stderr, flush=True)
+        return 4
     if a.report:
         return report(n, minutes)
     if a.status:

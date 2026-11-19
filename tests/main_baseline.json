@@ -1,0 +1,173 @@
+{
+  "format": 1,
+  "repository": "justfortune/text_voice",
+  "commit": "da86923760db9e90292de175d5fc5ddffe7e2129",
+  "tree": "a65f22178c3f5662ca6006f8bf1447bb4ab4db0c",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "git_blob_sha1": "7c989dc46e10431860124c98fc0a26399a9e6b82",
+      "bytes": 194
+    },
+    {
+      "path": ".gitignore",
+      "git_blob_sha1": "83e0186702a64aeea2ebfb72d188b97ed8c9c415",
+      "bytes": 712
+    },
+    {
+      "path": "README.md",
+      "git_blob_sha1": "e74ac7a079a5d4393287d02786a071d225f750ff",
+      "bytes": 9891
+    },
+    {
+      "path": "base/nox_audiobook.py",
+      "git_blob_sha1": "3ddf4a72c39d5413585ee34f42313a9a8132f6aa",
+      "bytes": 71369
+    },
+    {
+      "path": "data/accent_dict.csv",
+      "git_blob_sha1": "bb4fb6e713e8bf9da80bfbe658faf119867b4147",
+      "bytes": 20912
+    },
+    {
+      "path": "data/sreda_env.txt",
+      "git_blob_sha1": "1153f59622b13c49fbd183e74bc7f80259ccd5a4",
+      "bytes": 1783
+    },
+    {
+      "path": "data/sreda_envfast.txt",
+      "git_blob_sha1": "cf7e7733cf260320f1e5222da3bf48ab241460a8",
+      "bytes": 1904
+    },
+    {
+      "path": "data/sreda_manifest.json",
+      "git_blob_sha1": "09c3c94802b4fd5424af3e2bfbf54b25624cfe84",
+      "bytes": 1527
+    },
+    {
+      "path": "data/versii_env.txt",
+      "git_blob_sha1": "a3efb0aeaa6138dc80944a7f11979355388f7c54",
+      "bytes": 328
+    },
+    {
+      "path": "data/versii_envfast.txt",
+      "git_blob_sha1": "96bb3d41a7a89e37f70995c9e286333f80956670",
+      "bytes": 506
+    },
+    {
+      "path": "kit/cleanup_k1a.ps1",
+      "git_blob_sha1": "23aa2eaf847e2bd26e4842dd4fb664497ed3b90f",
+      "bytes": 11763
+    },
+    {
+      "path": "kit/go_kniga1a.ps1",
+      "git_blob_sha1": "170eb850246319b828467ec8036e5e0ffe1d5a0e",
+      "bytes": 61146
+    },
+    {
+      "path": "kit/nastroyki_ozvuchki.py",
+      "git_blob_sha1": "def1eea259ed20200818d06b05712b58e936c69c",
+      "bytes": 61482
+    },
+    {
+      "path": "kit/nox_cues.py",
+      "git_blob_sha1": "a3eeb7e91f6174445b7ab118dcad882cdff50501",
+      "bytes": 54947
+    },
+    {
+      "path": "kit/nox_fast.py",
+      "git_blob_sha1": "968b4c3b17b54cf0a14c5c3bf9f4171179b89c76",
+      "bytes": 77667
+    },
+    {
+      "path": "kit/nox_import.py",
+      "git_blob_sha1": "cd121d3e4dbd3b1c8a3cb41f8e6f51079dd5c5fd",
+      "bytes": 59860
+    },
+    {
+      "path": "kit/nox_part.py",
+      "git_blob_sha1": "d061ed09d33ebcee96e1e6c1d80e40accf91afcb",
+      "bytes": 23934
+    },
+    {
+      "path": "kit/nox_stress.py",
+      "git_blob_sha1": "28abd750b825676b2eddda3faf334ce9f4447190",
+      "bytes": 17741
+    },
+    {
+      "path": "kit/nox_studio.html",
+      "git_blob_sha1": "8e67f5cdb37419c61458e6aea0288d6eb1f59617",
+      "bytes": 309273
+    },
+    {
+      "path": "kit/nox_studio.ps1",
+      "git_blob_sha1": "0e989ce953a3a3254eb614fb1e37d1f8efa652f0",
+      "bytes": 14451
+    },
+    {
+      "path": "kit/nox_studio.py",
+      "git_blob_sha1": "e226ca84c713367c52b6fd6bc4dad7fcf37ba870",
+      "bytes": 517902
+    },
+    {
+      "path": "kit/nox_voices.py",
+      "git_blob_sha1": "ba758db7f26a109765046c36fe1a6fdf260b5542",
+      "bytes": 76035
+    },
+    {
+      "path": "kit/ochistka_redakcii_k1a.ps1",
+      "git_blob_sha1": "1f4227592b4094665d77aecc399999e7a2dcda33",
+      "bytes": 9004
+    },
+    {
+      "path": "kit/prep_kniga1a.ps1",
+      "git_blob_sha1": "fae73733786381d861d38534f47edcabaed7aaac",
+      "bytes": 181641
+    },
+    {
+      "path": "kit/razmetka_k1a.py",
+      "git_blob_sha1": "872870533e1471b97fd94919d61955467390bc67",
+      "bytes": 31252
+    },
+    {
+      "path": "kit/run_fast.ps1",
+      "git_blob_sha1": "33e71be30d7dc0cf479106fd7baf7d9639bf6448",
+      "bytes": 11466
+    },
+    {
+      "path": "kit/verify_k1a.py",
+      "git_blob_sha1": "cd7c92e56f61d8c46d1490221fb32c9fc7312e0e",
+      "bytes": 40587
+    },
+    {
+      "path": "kit/voicecheck_k1a.py",
+      "git_blob_sha1": "95037c387f069f7d8f60c0d4ae49f363cdead3dc",
+      "bytes": 9295
+    },
+    {
+      "path": "kit/voices_kniga1a.py",
+      "git_blob_sha1": "4c29d34fb0923cc8728a9eae03cf9b066dcdf9d9",
+      "bytes": 28307
+    },
+    {
+      "path": "kit/zvuk_k1a.py",
+      "git_blob_sha1": "6f38208a1d77e79974beda3c1b3122b53306926b",
+      "bytes": 58866
+    },
+    {
+      "path": "tools/sborshchik_k1a.ps1",
+      "git_blob_sha1": "0a1a61e87eefecc4aeaf5c88850dfaba62a7761b",
+      "bytes": 82219
+    },
+    {
+      "path": "tools/ustanovka_s_nulya.ps1",
+      "git_blob_sha1": "c216eb39001ba1bd9327d57a69989484e7f79761",
+      "bytes": 22567
+    },
+    {
+      "path": "tools/v_github.ps1",
+      "git_blob_sha1": "b5bbcd0d8b592f7bbd00607feec0f354f09ec03a",
+      "bytes": 21241
+    }
+  ]
+}

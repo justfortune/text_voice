@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NOX_KIT 2026-11-12a
+# NOX_KIT 2026-11-18d
 """
 voices_kniga1a.py — редакторский кастинг голосов первой книги по описаниям из текста.
 Обновляет work/roles.json, удаляет устаревшие образцы голосов (cast пересоздаст) и
@@ -180,7 +180,7 @@ def gender_prefix(instr: str) -> str:
     return ""
 
 
-def main():
+def _main(guard):
     roles = n.load_roles()
     existed = set(roles["roles"])
     changed = []
@@ -196,6 +196,8 @@ def main():
     if recast_path.exists():
         recast = {x.strip() for x in recast_path.read_text(encoding="utf-8").splitlines() if x.strip()}
     for role, (instr, why) in V.items():
+        if role in guard.protected:
+            continue
         instr = with_gender(role, instr)
         cfg = roles["roles"].get(role)
         if cfg is not None and cfg.get("user_cfg"):      # роль правили в «Настройки озвучки.xlsx» — таблица главнее
@@ -218,13 +220,15 @@ def main():
                 changed.append(role)
     # роли вне V (их описал сам конвейер): тоже явный пол, без пересоздания
     for role, cfg in roles["roles"].items():
-        if role in V or role in ("narrator", "Джек", "Хорват") or cfg.get("user_cfg"):
+        if role in guard.protected or role in V or role in ("narrator", "Джек", "Хорват") or cfg.get("user_cfg"):
             continue
         instr = with_gender(role, cfg.get("instruct") or "")
         if instr != cfg.get("instruct"):
             cfg["instruct"] = instr
     roles.setdefault("aliases", {})
     for a, b in ALIASES.items():
+        if a in guard.protected:
+            continue
         if roles["aliases"].get(a) != b:
             roles["aliases"][a] = b
             changed.append(a)
@@ -236,7 +240,7 @@ def main():
         al = roles.get("aliases", {})
         rows_ = n.load_rows()
         used = {al.get(r["speaker"], r["speaker"]) for r in rows_} | {n.resolve_role(r["speaker"], roles) for r in rows_}
-        keep = used | {"narrator", "Джек", "Хорват"} | set(roles["aliases"].values()) \
+        keep = used | guard.protected | {"narrator", "Джек", "Хорват"} | set(roles["aliases"].values()) \
             | {cfg.get("same_as") for cfg in roles["roles"].values() if cfg.get("same_as")}
         for role in [r for r in roles["roles"] if r not in keep]:
             before = n.voice_stems(roles)
@@ -248,28 +252,13 @@ def main():
         for role in pruned:
             while role in changed:
                 changed.remove(role)
-    n.ROLES_PATH.write_text(json.dumps(roles, ensure_ascii=False, indent=2), encoding="utf-8")
+    guard.write_roles(roles)
+    changed = [role for role in changed if role not in guard.protected]
+    removed_wavs = guard.invalidate_wavs(changed, roles)
+    removed_samples = guard.retire_samples(changed)
+    if recast & guard.protected:
+        print("защита редакции: образцы закреплённых ролей не пересозданы: " + ", ".join(sorted(recast & guard.protected)))
 
-    # устаревшие образцы голосов изменённых ролей -> удалить (cast пересоздаст по новым описаниям)
-    stems = n.voice_stems(roles)
-    removed_samples = 0
-    for role in set(changed) & set(roles["roles"].keys()):
-        wav_p, txt_p = n.voice_files(role, stems)
-        for p in (wav_p, txt_p):
-            if p.exists():
-                p.unlink()
-                removed_samples += 1
-
-    # уже озвученные сегменты изменённых ролей -> удалить (их немного, переозвучатся новым голосом)
-    removed_wavs = 0
-    if n.CSV_PATH.exists() and n.WAVS.is_dir():
-        changed_set = set(changed)
-        for r in n.load_rows():
-            if n.resolve_role(r["speaker"], roles) in changed_set:
-                p = n.wav_for(r, roles)
-                if p.exists():
-                    p.unlink()
-                    removed_wavs += 1
     if recast_path.exists():
         recast_path.write_text("", encoding="utf-8")
     pruned_old = [r for r in pruned if r in existed]
@@ -278,6 +267,12 @@ def main():
           + (f"; ролей без реплик убрано: {len(pruned_old)} ({', '.join(pruned_old[:12])}{'…' if len(pruned_old) > 12 else ''})"
              if pruned_old else ""))
     print("Основания кастинга: " + "; ".join(f"{k} — {v[1]}" for k, v in list(V.items())[:8]) + "; ...")
+
+
+def main():
+    from nox_voice_safety import RoleSafety
+    with RoleSafety(n) as guard:
+        return _main(guard)
 
 
 if __name__ == "__main__":
